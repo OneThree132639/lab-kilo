@@ -279,3 +279,45 @@ void enableRawMode() {
 ```
 
 这些宏均来自 `<termios.h>`. 部分可能与系统的默认设置一致, 具体不作深入. 
+
+## 给 `read()` 设置超时
+
+当前的 `read()` 函数会一直等待键盘输入再返回. 在文本编辑器中, 我们需要画面一直刷新, 这就要求 `read()` 函数允许在一段时间内没有接收到输入的时候返回. 
+
+```c
+void enableRawMode() {
+	tcgetattr(STDIN_FILENO, &orig_termios);
+	atexit(disableRawMode);  
+
+	struct termios raw = orig_termios; 
+	raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON); 
+	raw.c_oflag &= ~(OPOST); 
+	raw.c_cflag |= (CS8); 
+	raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG); 
+	raw.c_cc[VMIN] = 0; 
+	raw.c_cc[VTIME] = 1; 
+
+	tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw); 
+}
+
+int main() {
+	enableRawMode(); 
+
+	while (1) {
+		char c = '\0'; 
+		read(STDIN_FILENO, &c, 1); 
+		if (iscntrl(c)) {
+			printf("%d\r\n", c); 
+		} else {
+			prinf("%d (\'%c\')\r\n", c, c); 
+		}
+		if (c == 'q') break; 
+	}
+	
+	return 0; 
+}
+```
+
+ - `VMIN` 和 `VTIME`: 均来自 `<termios.h>`. `VMIN` 设置 `read()` 函数返回所需要读取的最少字节数, `VTIME` 设置 `read()` 函数返回之前等待的最大时间, 其单位为十分之一秒, 即 100 毫秒. 
+
+运行程序, 可以看到在不输入的时候, 程序自动打印 `0`, 因为这是我们设置的默认值且 `read()` 函数并没有对其进行修改. 如果输入字符, 它可以向先前一样打印字符的 `ASCII` 编码, 当字符本身可打印时, 字符本身也会一并打出. 
