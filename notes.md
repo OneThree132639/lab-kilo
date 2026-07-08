@@ -400,3 +400,34 @@ int main() {
  - `EAGAIN`: 来自 `<errno.h>`. 在 `Cygwin` 上, 当 `read()` 超时时, 它返回 `-1` 并将 `erron` 设为 `EAGAIN`, 而不是返回 `0`. 为了兼容在 `Cygwin` 上的运行, 此处不将 `errno == EAGAIN` 认为是错误. 
 
 使用 `./kilo < <kilo.c` 将文件作为标准输入, 或者使用 `echo test | ./kilo` 将管道作为标准输入, 均可以使 `tcgetattr()` 函数发生错误, 对应错误信息为: `Inappropriate ioctl for device`. 
+
+## 分区
+
+使用注释对各个部分进行区分以便管理. 
+
+```c
+/*** includes ***/
+
+#include <ctype.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <termios.h>
+#include <unistd.h>
+
+/*** data ***/
+
+struct termios orig_termios;
+
+/*** terminal ***/
+
+void die(const char *s) { … }
+
+void disableRawMode() { … }
+
+void enableRawMode() { … }
+
+/*** init ***/
+
+int main() { … }
+```
