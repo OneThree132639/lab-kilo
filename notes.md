@@ -468,3 +468,48 @@ int main() {
 ```
 
 `CTRL_KEY` 宏用于获得传入字符参数低 `5` 位的值, 从效果来看, 这与 `Ctrl` + 字母按键的效果是一样的. 
+
+### 重构键盘输入
+
+```c
+/*** terminal ***/
+
+char editorReadKey() {
+	int nread; 
+	char c; 
+	while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
+		if (nread == -1 && errno != EAGAIN) {
+			die("read"); 
+		}
+	}
+	return c; 
+}
+
+/*** input ***/
+void editorProcessKeypress() {
+	char c = editorReadKey(); 
+
+	switch (c) {
+		case CTRL_KEY('q'): 
+			exit(0); 
+			break; 
+	}
+}
+
+/*** init ***/
+
+int main() {
+	enableRawMode(); 
+
+	while (1) {
+		editorProcessKeyPress(); 
+	}
+
+	return 0; 
+}
+```
+
+ - `editorReadKey()` 函数用于读取按键信号. 之后会扩展其功能以便处理转义序列(`escape sequence`)如方向键. 它隶属于 `/*** terminal ***/` 部分, 处理终端的输入. 
+ - `editorProcessKeypress` 函数用于等待按键信号并执行. 之后会扩展其功能以便处理各种 `Ctrl` + 字母按键组合或者其它特殊按键以实现不同的功能. 它隶属于 `/*** input ***/` 部分, 位于更高的抽象层次. 
+
+此外, 我们去除了打印按键输入的部分, 以便防止这些输出影响后续的步骤. 
