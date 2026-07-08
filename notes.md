@@ -154,3 +154,24 @@ void enableRawMode() {
 
 现在, 在进程中使用 `Ctrl+C` 和 `Ctrl+Z` 键将分别显示 `3` 和 `26`, 而不是退出或者挂起进程. 
 
+## 关闭 `Ctrl+S` 和 `Ctrl+Q` 信号
+
+默认情况下, `Ctrl+S` 和 `Ctrl+Q` 用于 `软件流控制(software flow control)`. 其中, `Ctrl+S` 用于停止向终端写入数据, `Ctrl+Q` 用于恢复向终端写入数据. 
+
+```c
+void enableRawMode() {
+	tcgetattr(STDIN_FILENO, &orig_termios);
+	atexit(disableRawMode);  
+
+	struct termios raw = orig_termios; 
+	raw.c_iflag &= ~(IXON); 
+	raw.c_lflag &= ~(ECHO | ICANON | ISIG); 
+
+	tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw); 
+}
+```
+
+ - `IXON`: 来自 `<termios.h>`. 用于控制是否启用软件流控制(即 `XON/XOFF` 协议). 
+
+现在, 在进程中使用 `Ctrl+S` 和 `Ctrl+Q` 键将分别显示 `19` 和 `17`. 
+
