@@ -218,3 +218,43 @@ void enableRawMode() {
  - `ICRNL`: 来自 `<termios.h>`. 控制回车转换. 
 
 现在, 在进程中使用 `Ctrl+M` 键将显示 `13`, 使用 `Enter` 键也将显示 `13`. 
+
+## 关闭所有输出处理
+
+回车 `\r` 的作用是将光标移动到行首, 换行 `\n` 的作用是将光标向下移动一行. 因此, 终端想要新起一行需要这两个字符的协同作用 `\r\n`. 终端在输出的时候会自动将 `\n` 替换为 `\r\n`. 
+
+```c
+void enableRawMode() {
+	tcgetattr(STDIN_FILENO, &orig_termios);
+	atexit(disableRawMode);  
+
+	struct termios raw = orig_termios; 
+	raw.c_iflag &= ~(ICRNL | IXON); 
+	raw.c_oflag &= ~(OPOST); 
+	raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG); 
+
+	tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw); 
+}
+```
+
+ - `OPOST`: 来自 `<termios.h>`. `POST` 指 `post-process output`. 
+
+运行程序, 可以发现输出程阶梯状排列. 每次输出只会让光标下移而不会令其回到行首, 为了修复这个问题, 我们手动增加回车 `\r`: 
+
+```c
+int main() {
+	enableRawMode(); 
+
+	char c; 
+	while (read(STDIN_FILENO, &c, 1) == 1 && c != 'q') {
+		if (iscntrl(c)) {
+			printf("%d\r\n", c); 
+		} else {
+			printf("%d (\'%c\')\r\n", c, c); 
+		}
+	}
+	return 0; 
+}
+```
+
+现在, 光标可以像之前一样正常回到行首. 需要注意在之后需要进行“移动至下一行行首”的操作的时候, 都需要同时使用 `\r\n`. 
