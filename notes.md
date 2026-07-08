@@ -258,3 +258,24 @@ int main() {
 ```
 
 现在, 光标可以像之前一样正常回到行首. 需要注意在之后需要进行“移动至下一行行首”的操作的时候, 都需要同时使用 `\r\n`. 
+
+## 更多的标志位
+
+为了实现文本编辑器的目标, 我们需要关闭更多的标志位: 
+
+```c
+void enableRawMode() {
+	tcgetattr(STDIN_FILENO, &orig_termios);
+	atexit(disableRawMode);  
+
+	struct termios raw = orig_termios; 
+	raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON); 
+	raw.c_oflag &= ~(OPOST); 
+	raw.c_cflag |= (CS8); 
+	raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG); 
+
+	tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw); 
+}
+```
+
+这些宏均来自 `<termios.h>`. 部分可能与系统的默认设置一致, 具体不作深入. 
