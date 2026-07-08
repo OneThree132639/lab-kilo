@@ -321,3 +321,82 @@ int main() {
  - `VMIN` 和 `VTIME`: 均来自 `<termios.h>`. `VMIN` 设置 `read()` 函数返回所需要读取的最少字节数, `VTIME` 设置 `read()` 函数返回之前等待的最大时间, 其单位为十分之一秒, 即 100 毫秒. 
 
 运行程序, 可以看到在不输入的时候, 程序自动打印 `0`, 因为这是我们设置的默认值且 `read()` 函数并没有对其进行修改. 如果输入字符, 它可以向先前一样打印字符的 `ASCII` 编码, 当字符本身可打印时, 字符本身也会一并打出. 
+
+## 错误处理
+
+`die()` 函数用于打印错误信息并退出程序. 错误码为 `1`. 
+
+```c
+void die(const char *s) {
+	perror(s); 
+	exit(1); 
+}
+```
+
+ - `void perror(const char *s)`: 来自 `<stdio.h>`. 按照下面的顺序将错误信息输出到标准错误 `stderr`: 字符指针 `s` (不为空或不指向空字节) 指向的字符串, 一个冒号和一个空格 `: `, 由 `errno` 的值决定的错误信息, 换行符 `\n`. 
+ - `void exit(int status)`: 来自 `<stdlib.h>`, 按照登记顺序的逆序运行所有被 `atexit()` 函数登记过的函数. 
+
+```c
+#include <ctype.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <termios.h>
+#include <unistd.h>
+
+struct termios orig_termios; 
+
+void die(const char *s) {
+	perror(s); 
+	exit(1); 
+}
+
+void disableRawMode() {
+	if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios) == -1) {
+		die("tcsetattr"); 
+	}
+}
+
+void enableRawMode() {
+	if (tcgetattr(STDIN_FILENO, &orig_termios) == -1) {
+		die("tcgetattr"); 
+	}
+	atexit(disableRawMode);  
+
+	struct termios raw = orig_termios; 
+	raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON); 
+	raw.c_oflag &= ~(OPOST); 
+	raw.c_cflag |= (CS8); 
+	raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG); 
+	raw.c_cc[VMIN] = 0; 
+	raw.c_cc[VTIME] = 1; 
+
+	if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) {
+		die("tcsetattr"); 
+	}
+}
+
+int main() {
+	enableRawMode(); 
+
+	while (1) {
+		char c = '\0'; 
+		if (read(STDIN_FILENO, &c, 1) == -1 && errno != EAGAIN) {
+			die("read"); 
+		}
+		if (iscntrl(c)) {
+			printf("%d\r\n", c); 
+		} else {
+			printf("%d (\'%c\')\r\n", c, c); 
+		}
+		if (c == 'q') break; 
+	}
+
+	return 0; 
+}
+```
+
+ - `errno`: 来自 `<errno.h>`. 当 `tcgetattr()`, `tcsetattr()`, `read()` 发生错误时, 除了返回 `-1` 值之外还会设置 `errno` 的值以说明错误发生的原因. 
+ - `EAGAIN`: 来自 `<errno.h>`. 在 `Cygwin` 上, 当 `read()` 超时时, 它返回 `-1` 并将 `erron` 设为 `EAGAIN`, 而不是返回 `0`. 为了兼容在 `Cygwin` 上的运行, 此处不将 `errno == EAGAIN` 认为是错误. 
+
+使用 `./kilo < <kilo.c` 将文件作为标准输入, 或者使用 `echo test | ./kilo` 将管道作为标准输入, 均可以使 `tcgetattr()` 函数发生错误, 对应错误信息为: `Inappropriate ioctl for device`. 
