@@ -153,6 +153,7 @@ void enableRawMode() {
  - `ISIG`: 来自 `<termios.h>`. 与 `ICANON` 类似, 以 `I` 开头但是它不是输入标志 `input flag` 而是本地标志 `local flag`. 
 
 现在, 在进程中使用 `Ctrl+C` 和 `Ctrl+Z` 键将分别显示 `3` 和 `26`, 而不是退出或者挂起进程. 
+在 MacOS 上, 这一步同时关闭了 `Ctrl+Y` 的功能. 
 
 ## 关闭 `Ctrl+S` 和 `Ctrl+Q` 信号
 
@@ -174,4 +175,26 @@ void enableRawMode() {
  - `IXON`: 来自 `<termios.h>`. 用于控制是否启用软件流控制(即 `XON/XOFF` 协议). 
 
 现在, 在进程中使用 `Ctrl+S` 和 `Ctrl+Q` 键将分别显示 `19` 和 `17`. 
+
+## 关闭 `Ctrl+V` 信号
+
+在部分系统上, 使用 `Ctrl+V` 允许我们再其之后输入字面字符(比如 `Ctrl+V`, `Ctrl+C` 组合不会停止进程, 而是输入 `3` 个字节). 
+
+```c
+void enableRawMode() {
+	tcgetattr(STDIN_FILENO, &orig_termios);
+	atexit(disableRawMode);  
+
+	struct termios raw = orig_termios; 
+	raw.c_iflag &= ~(IXON); 
+	raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG); 
+
+	tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw); 
+}
+```
+
+ - `IEXTEN`: 来自 `<termios.h>`. 与 `ICANON` 类似, 以 `I` 开头但是它不是输入标志 `input flag` 而是本地标志 `local flag`. 控制扩展输入处理功能. 
+
+现在, 在进程中使用 `Ctrl+V` 键将显示 `22`. 
+在 MacOS 上, 这一步同时关闭了 `Ctrl+O` 的功能. 
 
