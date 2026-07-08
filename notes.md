@@ -513,3 +513,41 @@ int main() {
  - `editorProcessKeypress` 函数用于等待按键信号并执行. 之后会扩展其功能以便处理各种 `Ctrl` + 字母按键组合或者其它特殊按键以实现不同的功能. 它隶属于 `/*** input ***/` 部分, 位于更高的抽象层次. 
 
 此外, 我们去除了打印按键输入的部分, 以便防止这些输出影响后续的步骤. 
+
+### 清空屏幕
+
+为了实现文本编辑器的功能, 我们希望在用户每次按键之后在渲染(`render`)界面(`interface`). 一般的终端都是一行行运行过的命令与其输出, 文本编辑器的首要任务就是清空这些文字. 
+
+```c
+/*** output ***/
+
+void editorRefreshScreen() {
+	write(STDOUT_FILENO, "\x1b[2J", 4); 
+}
+
+/*** init ***/
+
+int main() {
+	enableRawMode(); 
+
+	while (1) {
+		editorRefreshScreen(); 
+		editorProcessKeypress(); 
+	}
+
+	return 0; 
+}
+```
+
+ - `ssize_t write(int fildes, const void *buf, size_t nbyte)`: 来自 `<unistd.h>`. 将 `buf` 指针指向的缓存中的 `nbyte` 字节写入打开文件描述符 `fildes` 指向的文件. 返回值为成功写入的字节数, 返回值为 `-1` 表明发生了错误并设置 `errno` 的值. 
+ - `STDOUT_FILENO`: 来自 `<unistd.h>`. 标准输出文件, 值为 `1`. 
+
+在 `editorRefreshScreen` 中, 向标准输出文件中写入 `4` 个字节. 其中, 第一个字节使用十六进制表示(`\x1b`), 即 `27`, 是转义字符(`escape character`), 我们将在之后多次使用到它. 这 `4` 个字节组成一个转义序列(`escape sequence`), 转义序列总是以 `\x16[` 开头. 
+`J` 字符指示的命令会根据选择的参数清空屏幕中的部分字符, 默认参数为 `0`: 
+| 参数 | 意义 |
+| --- | --- |
+| `0` | 清空光标当前位置到屏幕末尾的所有内容. |
+| `1` | 清空屏幕开头到光标当前位置的所有内容. |
+| `2` | 清空整个屏幕的内容. |
+
+在此处我们使用 `VT100` 转义字符, 它是广受现代终端模拟器支持的标准. 如果希望支持更多的终端, 可以通过使用 `ncurses` 库获得特定终端使用的转义字符. 
