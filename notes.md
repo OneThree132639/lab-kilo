@@ -435,3 +435,36 @@ void enableRawMode() { … }
 
 int main() { … }
 ```
+
+## 原始输入和输出
+
+### 按键 `Ctrl+Q` 退出程序
+
+```c
+/*** defines ***/
+
+#define CTRL_KEY(k) ((k) & 0x1f)
+
+/*** init ***/
+
+int main() {
+	enableRawMode(); 
+
+	while (1) {
+		char c = '\0'; 
+		if (read(STDIN_FILENO, &c, 1) == -1 && errno != EAGAIN) {
+			die("read"); 
+		}
+		if (iscntrl(c)) {
+			printf("%d\r\n", c); 
+		} else {
+			printf("%d (\'%c\')\r\n", c, c); 
+		}
+		if (c == CTRL_KEY('q')) break; 
+	}
+
+	return 0; 
+}
+```
+
+`CTRL_KEY` 宏用于获得传入字符参数低 `5` 位的值, 从效果来看, 这与 `Ctrl` + 字母按键的效果是一样的. 
