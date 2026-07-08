@@ -198,3 +198,23 @@ void enableRawMode() {
 现在, 在进程中使用 `Ctrl+V` 键将显示 `22`. 
 在 MacOS 上, 这一步同时关闭了 `Ctrl+O` 的功能. 
 
+## 修复 `Ctrl+M`
+
+在当前的程序中, 输入 `Ctrl+M` 将会得到 `10` 而不是期望的 `13`. 这是因为操作系统自动将回车 `carriage return`(`\r`, `13`) 转换为换行 `newline`(`\n`, `10`). 
+
+```c
+void enableRawMode() {
+	tcgetattr(STDIN_FILENO, &orig_termios);
+	atexit(disableRawMode);  
+
+	struct termios raw = orig_termios; 
+	raw.c_iflag &= ~(ICRNL | IXON); 
+	raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG); 
+
+	tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw); 
+}
+```
+
+ - `ICRNL`: 来自 `<termios.h>`. 控制回车转换. 
+
+现在, 在进程中使用 `Ctrl+M` 键将显示 `13`, 使用 `Enter` 键也将显示 `13`. 
