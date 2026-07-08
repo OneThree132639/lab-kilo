@@ -102,7 +102,7 @@ void enableRawMode() {
 }
 ```
 
- - `ICANON`: 来自 `<termios.h>`. 定义为 `0x0002`. 
+ - `ICANON`: 来自 `<termios.h>`. 定义为 `0x0002`. 虽然以 `I` 开头但是它不是输入标志 `input flag` 而是本地标志 `local flag`. 
 
 可以发现修改后的程序在输入字符 `q` 之后立即退出. 
 
@@ -134,4 +134,23 @@ int main() {
 
 ## 关闭 `Ctrl+C` 和 `Ctrl+Z` 信号
 
-在终端中, 默认情况下使用 `Ctrl+C` 会向当前进程发送一个 `SIGINT` 信号以终止进程(停止执行并释放资源), 使用 `Ctrl+Z` 会向当前进程发送一个 `SIGTSTP` 信号以挂起进程(暂定进程的执行, 将其放入后台, 并将控制权还给命令行提示符). 使用 `jobs` 可以查看当前 `shell`(命令行解释器进程, 如一个 MacOS Terminal 窗口)会话中的后台任务. 
+在终端中, 默认情况下使用 `Ctrl+C` 会向当前进程发送一个 `SIGINT`(`Interrupt`) 信号以终止进程(停止执行并释放资源), 使用 `Ctrl+Z` 会向当前进程发送一个 `SIGTSTP`(`Terminal Stop`) 信号以挂起进程(暂定进程的执行, 将其放入后台, 并将控制权还给命令行提示符). 使用 `jobs` 可以查看当前 `shell`(命令行解释器进程, 如一个 MacOS Terminal 窗口)会话中的后台任务. 使用 `fg` 可以将后台任务切换到前台继续执行, 使用 `bg` 可以将挂起的任务在后台继续执行. 
+
+需要注意的是, `read()` 函数在读取数据前被信号中断, 会讲返回值设置为 `-1` 并设置错误代码 `errno` 为 `EINTR`(即 `4`). 因此当前代码在使用 `Ctrl+Z` 挂起之后再使用 `fg` 或 `bg` 恢复进程时, `read()` 函数会返回 `-1` 导致退出循环并结束进程. `bg` 还会因为作为后台进程希望向终端进行输出而触发其它信号. 
+
+```c
+void enableRawMode() {
+	tcgetattr(STDIN_FILENO, &orig_termios);
+	atexit(disableRawMode);  
+
+	struct termios raw = orig_termios; 
+	raw.c_lflag &= ~(ECHO | ICANON | ISIG); 
+
+	tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw); 
+}
+```
+
+ - `ISIG`: 来自 `<termios.h>`. 与 `ICANON` 类似, 以 `I` 开头但是它不是输入标志 `input flag` 而是本地标志 `local flag`. 
+
+现在, 在进程中使用 `Ctrl+C` 和 `Ctrl+Z` 键将分别显示 `3` 和 `26`, 而不是退出或者挂起进程. 
+
