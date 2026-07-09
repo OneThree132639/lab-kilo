@@ -1238,3 +1238,223 @@ void editorProcessKeypress(void) {
 ```
 
 现在程序可以成功使用这些按键控制光标. 
+
+### 方向键
+
+接下来让我们使用方向键替换先前的 `W` `A` `S` `D`. 在先前的步骤中我们知道了方向键信号实际上是一类转义序列: 
+
+| 方向键 | 对应转义序列 |
+| --- | --- |
+| 上 | `\x1b[A` |
+| 下 | `\x1b[B` |
+| 右 | `\x1b[C` |
+| 左 | `\x1b[D` |
+
+首先修改 `editorReadKey` 使其可以处理转义字符: 
+
+```c
+/*** terminal ***/
+
+char editorReadKey(void) {
+	int nread; 
+	char c; 
+	while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
+		if (nread == -1 && errno != EAGAIN) {
+			die("read"); 
+		}
+	}
+
+	if (c == '\x1b') {
+		char seq[3]; 
+
+		if (read(STDIN_FILENO, &seq[0], 1) != 1) return '\x1b'; 
+		if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b'; 
+
+		if (seq[0] == '[') {
+			switch (seq[1]) {
+				case 'A': return 'w'; 
+				case 'B': return 's'; 
+				case 'C': return 'd'; 
+				case 'D': return 'a'; 
+			}
+		}
+
+		return '\x1b'; 
+	} else {
+		return c; 
+	}
+}
+```
+
+设置 `buf` 的长度为 `3` 是因为后续需要处理更加长的转义序列. 
+
+现在程序可以处理方向键的信号了. 
+
+当前我们将方向键信号与 `'w'`, `'a'`, `'s'`, `'d'` 字符进行绑定, 考虑到后续这些键应当作为正常输入使用, 我们创建常量来指示方向键: 
+
+```c
+/*** defines ***/
+
+enum editorKey {
+	ARROW_LEFT = 'a', 
+	ARROW_RIGHT = 'd', 
+	ARROW_UP = 'w', 
+	ARROW_DOWN = 's'
+}; 
+
+/*** terminal ***/
+
+char editorReadKey(void) {
+	int nread; 
+	char c; 
+	while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
+		if (nread == -1 && errno != EAGAIN) {
+			die("read"); 
+		}
+	}
+
+	if (c == '\x1b') {
+		char seq[3]; 
+
+		if (read(STDIN_FILENO, &seq[0], 1) != 1) return '\x1b'; 
+		if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b'; 
+
+		if (seq[0] == '[') {
+			switch (seq[1]) {
+				case 'A': return ARROW_UP; 
+				case 'B': return ARROW_DOWN; 
+				case 'C': return ARROW_RIGHT; 
+				case 'D': return ARROW_LEFT; 
+			}
+		}
+
+		return '\x1b'; 
+	} else {
+		return c; 
+	}
+}
+
+/*** input ***/
+
+void editorMoveCursor(char key) {
+	switch (key) {
+		case ARROW_LEFT: 
+			E.cx--; 
+			break;
+		case ARROW_RIGHT: 
+			E.cx++; 
+			break;
+		case ARROW_UP: 
+			E.cy--; 
+			break;
+		case ARROW_DOWN: 
+			E.cy++; 
+			break;
+	}
+}
+
+void editorProcessKeypress(void) {
+	char c = editorReadKey(); 
+
+	switch (c) {
+		case CTRL_KEY('q'): 
+			write(STDOUT_FILENO, "\x1b[2J", 4); 
+			write(STDOUT_FILENO, "\x1b[H", 3); 
+			exit(0); 
+			break; 
+		case ARROW_UP:
+		case ARROW_DOWN: 
+		case ARROW_LEFT: 
+		case ARROW_RIGHT: 
+			editorMoveCursor(c); 
+			break; 
+	}
+}
+```
+
+在此基础上, 我们可以为 `enum editorKey` 选择不会与已知信号发生冲突的值, 比如一个足够大的超出 `ASCII` 编码范围的数: 
+
+```c
+/*** defines ***/
+
+enum editorKey {
+	ARROW_LEFT = 1000, 
+	ARROW_RIGHT, 
+	ARROW_UP, 
+	ARROW_DOWN
+}; 
+
+/*** terminal ***/
+
+int editorReadKey(void) {
+	int nread; 
+	char c; 
+	while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
+		if (nread == -1 && errno != EAGAIN) {
+			die("read"); 
+		}
+	}
+
+	if (c == '\x1b') {
+		char seq[3]; 
+
+		if (read(STDIN_FILENO, &seq[0], 1) != 1) return '\x1b'; 
+		if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b'; 
+
+		if (seq[0] == '[') {
+			switch (seq[1]) {
+				case 'A': return ARROW_UP; 
+				case 'B': return ARROW_DOWN; 
+				case 'C': return ARROW_RIGHT; 
+				case 'D': return ARROW_LEFT; 
+			}
+		}
+
+		return '\x1b'; 
+	} else {
+		return c; 
+	}
+}
+
+/*** input ***/
+
+void editorMoveCursor(int key) {
+	switch (key) {
+		case ARROW_LEFT: 
+			E.cx--; 
+			break;
+		case ARROW_RIGHT: 
+			E.cx++; 
+			break;
+		case ARROW_UP: 
+			E.cy--; 
+			break;
+		case ARROW_DOWN: 
+			E.cy++; 
+			break;
+	}
+}
+
+void editorProcessKeypress(void) {
+	int c = editorReadKey(); 
+
+	switch (c) {
+		case CTRL_KEY('q'): 
+			write(STDOUT_FILENO, "\x1b[2J", 4); 
+			write(STDOUT_FILENO, "\x1b[H", 3); 
+			exit(0); 
+			break; 
+		case ARROW_UP:
+		case ARROW_DOWN: 
+		case ARROW_LEFT: 
+		case ARROW_RIGHT: 
+			editorMoveCursor(c); 
+			break; 
+	}
+}
+```
+
+由于 `enum` 会自动按序将未显式赋值的枚举量复制, 因此将 `ARROW_LEFT` 赋值为 `1000` 之后, `ARROW_RIGHT`, `ARROW_UP`, `ARROW_DOWN` 会被依次赋值为 `1001`, `1002`, `1003`. 随着这个改动, 原本部分类型为 `char` 的变量或函数返回值应当修改为 `int`. 
+
+现在在程序中只能通过方向键控制光标的移动. 但是, 如果你的手速很快, 或者你可以尝试调整 `void enableRawMode(void)` 函数中 `raw.c_cc[VTIME] = 1;` 语句的赋值, 
+你可以在程序中通过连续按 `Escape` + `[` + `Shift+A` 的方式实现光标的上移, 这相当于手动输入上箭头的转义序列, 其它方向键同理. 
