@@ -600,3 +600,29 @@ void editorProcessKeypress() {
 我们在 `die()` 函数和按键 `Ctrl+Q` 响应中添加了清空屏幕和光标重定位的功能. 
 
 另一种方式是在 `atexit()` 函数中添加清空屏幕和光标重定位的功能函数, 但是这种方式会导致 `die()` 函数打印出的错误信息在打印之后被立刻清楚. 
+
+### 波浪号(`Tildes`, `~`)
+
+像 `vim` 一样, 我们使用位于行首的波浪号 `~` 表示在文件末尾之后的行, 也就是说, 这些行是不被包括在文件中的. 
+
+```c
+/*** output ***/
+
+void editorDrawRows() {
+	int y; 
+	for (y = 0; y < 24; y++) {
+		write(STDOUT_FILENO, "~\r\n", 3); 
+	}
+}
+
+void editorRefreshScreen() {
+	write(STDOUT_FILENO, "\x1b[2J", 4); 
+	write(STDOUT_FILENO, "\x1b[H", 3); 
+
+	editorDrawRows();
+
+	write(STDOUT_FILENO, "\x1b[H", 3); 
+}
+```
+
+`editorDrawRows()` 函数将用于绘制文本的每一行. 当前它的功能是在前 `24` 行的行首绘制一个波浪号, 表明对应行不是文件的一部分. 由于当前并不知道终端的具体大小, 因此我们简单将行数设置为 `24`. 在绘制完成后利用转义字符 `\x1b[H` 将光标移动回屏幕的左上角. 
