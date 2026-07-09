@@ -670,7 +670,7 @@ void enableRawMode() {
 
 补充: 在现代 `C` 标准中, 无参数函数的规范写法是在括号中加入 `void` 关键字, 而不是保留空括号(表明未指定参数). 为了避免编译器对该问题的警告, 之后的代码将采用使用 `void` 关键字的写法. 
 
-### 窗口大小, 最简单的方式
+### 窗口大小, 简单的方式
 
 在大部分系统中, 可以通过调用 `ioctl()` 函数并使用 `TIOCGWINSZ` 参数获取终端的大小. `TIOCGWINSZ` 指 `Terminal IOCtl Get WINdow SiZe`, 而 `IOCtl` 指 `Input/Output Control`. 
 
@@ -741,3 +741,163 @@ void editorDrawRows(void) {
 ```
 
 现在我们可以打印出正确行数的波浪号了. 
+
+### 窗口大小, 困难的方式
+
+并不是所有的系统都可以使用 `ioctl()` 函数获取窗口大小, 因此我们需要一个回落方案解决这些系统的获取窗口大小问题. 
+
+该方案的策略是将光标放置屏幕的右下方, 然后使用转义序列获取光标的坐标, 这样就可以获得窗口的行数的列数. 
+
+首先, 将光标移动至屏幕的右下方: 
+
+```c
+/*** terminal ***/
+
+int getWindowSize(int *rows, int *cols) {
+	struct winsize ws; 
+
+	if (1 || ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
+		if (write(STDOUT_FILENO, "\x1b[999C\x1b[999B", 12) != 12) return -1; 
+		editorReadKey(); 
+		return -1; 
+	} 
+	*cols = ws.ws_col; 
+	*rows = ws.ws_row; 
+	return 0; 
+}
+```
+
+由于没有直接的“将光标移动至屏幕的右下方”的命令, 我们使用连续的两个转义序列 `\x1b[999C` 和 `\x1b[999B`, 分别表示“将光标右移 `999` 个单位”和“将光标下移 `999` 个单位”. 参数 `999` 表示移动的单位数, 将其设置为一个足够大的数以便确保光标可以移动至屏幕的右下方. 当光标移动至屏幕边缘的时候, `C` 和 `B` 转义序列不会使其进一步移动, 也就是说, 不用担心光标会移动到屏幕之外. 由于 `H` 命令(将光标移动到固定的坐标)并没有说明当参数超出屏幕时的行为, 为了防止未定义行为的发生, 不使用 `\x1b[999;999H` 转义序列. 
+
+注意到我们在使用 `ioctl()` 函数之前添加了 `1 ||` 使得该条件判断式始终为真, 以便调试这一回落分支. 
+
+由于在该分支中总是返回 `-1`, 在成功使用转义序列之后, 调用一次 `editorReadKey()` 函数以便停顿观察程序状态. 运行程序, 在正常情况下, 可以看到光标位于屏幕的右下方. 按任意按键, 可以看到清除屏幕之后显示的调用 `die()` 函数打印的错误信息. 
+
+接下来是获取光标的坐标, 使用 `n` 转义序列可以获取终端的状态信息, 其中参数 `6` 可以获取光标位置有关信息. 
+
+```c
+/*** terminal ***/
+
+int getCursorPosition(int *rows, int *cols) {
+	if (write(STDOUT_FILENO, "\x1b[6n", 4) != 4) return -1; 
+
+	printf("\r\n"); 
+	char c; 
+	while (read(STDIN_FILENO, &c, 1) == 1) {
+		if (iscntrl(c)) {
+			printf("%d\r\n", c); 
+		} else {
+			printf("%d (\'%c\')\r\n", c, c); 
+		}
+	}
+
+	editorReadKey(); 
+	return -1; 
+}
+
+int getWindowSize(int *rows, int *cols) {
+	struct winsize ws; 
+
+	if (1 || ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
+		if (write(STDOUT_FILENO, "\x1b[999C\x1b[999B", 12) != 12) return -1; 
+		return getCursorPosition(rows, cols); 
+	} 
+	*cols = ws.ws_col; 
+	*rows = ws.ws_row; 
+	return 0; 
+}
+```
+
+尝试使用上述程序查看使用 `\x1b[6n` 转义序列得到的返回值, 得到的结果为: 
+
+```text
+27
+91 ('[')
+51 ('3')
+53 ('5')
+59 (';')
+49 ('1')
+51 ('3')
+53 ('5')
+82 ('R')
+```
+
+可以看到返回的结果是一个转义序列, 其格式为 `\x1b[rows;colsR]`, 其中 `rows` 和 `cols` 分别为行数和列数. 
+
+和之前一样, 我们调用了一个 `editorReadKey()` 函数以停顿程序并观察输出. 
+
+为了从这串但会转义序列中提取行数和列数, 首先需要将其读取至缓冲区中, 从标准输入中逐个读取字符直至遇到 `'R'`: 
+
+```c
+int getCursorPosition(int *rows, int *cols) {
+	char buf[32]; 
+	unsigned int i = 0; 
+
+	if (write(STDOUT_FILENO, "\x1b[6n", 4) != 4) return -1; 
+
+	while (i < sizeof(buf) - 1) {
+		if (read(STDIN_FILENO, &buf[i], 1) != 1) break; 
+		if (buf[i] == 'R') break; 
+		i++; 
+	}
+	buf[i] = '\0'; 
+
+	printf("\r\n&buf[1]: \'%s\'\r\n", &buf[1]); 
+
+	editorReadKey(); 
+	return -1; 
+}
+```
+
+由于 `buf` 读取到的第一个字节是 `\x1b`, 即转义字符, 如果将其通过 `printf()` 函数会进行转义而无法打印出具体的字符, 因此向 `printf()` 函数中传入 `&buf[1]` 以打印后续的字符, 输出应当类似: 
+
+```text
+&buf[1]: '[35;135'
+```
+
+此外, `printf()` 函数要求字符数组以 `\0` 标志结束, 因此, 我们在 `buf` 的最后一个字节处添加 `\0`. 
+
+接下来, 使用 `sscanf()` 函数提取字符串中的行数和列数: 
+
+```c
+/*** terminal ***/
+
+int getCursorPosition(int *rows, int *cols) {
+	char buf[32]; 
+	unsigned int i = 0; 
+
+	if (write(STDOUT_FILENO, "\x1b[6n", 4) != 4) return -1; 
+
+	while (i < sizeof(buf) - 1) {
+		if (read(STDIN_FILENO, &buf[i], 1) != 1) break; 
+		if (buf[i] == 'R') break; 
+		i++; 
+	}
+	buf[i] = '\0'; 
+
+	if (buf[0] != '\x1b' || buf[1] != '[') return -1; 
+	if (sscanf(&buf[2], "%d;%d", rows, cols) != 2) return -1; 
+ 
+	return 0; 
+}
+```
+
+`sscanf()` 函数来自 `<stdio.h>`. 修改之后运行程序可以看到程序输出了正确行数的波浪号. 
+
+在确认运行正常之后, 我们可以将之前用于调试的 `1 ||` 判断条件删除: 
+
+```c
+/*** terminal ***/
+
+int getWindowSize(int *rows, int *cols) {
+	struct winsize ws; 
+
+	if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
+		if (write(STDOUT_FILENO, "\x1b[999C\x1b[999B", 12) != 12) return -1; 
+		return getCursorPosition(rows, cols); 
+	} 
+	*cols = ws.ws_col; 
+	*rows = ws.ws_row; 
+	return 0; 
+}
+```
