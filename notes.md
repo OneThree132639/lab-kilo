@@ -566,3 +566,37 @@ void editorRefreshScreen() {
 ```
 
 `\x1b[a;bH` 用于将光标移动至 `a` 行 `b` 列, 其中 `a` 和 `b` 的默认值均为 `1`, 因此 `\x1b[H` 对应的就是屏幕的左上角. 
+
+### 在退出的时候清空屏幕
+
+如果在运行的时候发生错误, 错误信息会在光标所在位置开始打印, 这会导致屏幕上的信息杂乱(很有可能的情况是, 错误信息与之前编辑的文本混杂在一起). 为了避免这个问题, 我们需要在程序正常或因错误退出时清空屏幕并对光标进行重定位. 
+
+```c
+/*** terminal ***/
+
+void die(const char *s) {
+	write(STDOUT_FILENO, "\x1b[2J", 4); 
+	write(STDOUT_FILENO, "\x1b[H", 3); 
+
+	perror(s); 
+	exit(1); 
+}
+
+/*** input ***/
+
+void editorProcessKeypress() {
+	char c = editorReadKey(); 
+
+	switch (c) {
+		case CTRL_KEY('q'): 
+			write(STDOUT_FILENO, "\x1b[2J", 4); 
+			write(STDOUT_FILENO, "\x1b[H", 3); 
+			exit(0); 
+			break; 
+	}
+}
+```
+
+我们在 `die()` 函数和按键 `Ctrl+Q` 响应中添加了清空屏幕和光标重定位的功能. 
+
+另一种方式是在 `atexit()` 函数中添加清空屏幕和光标重定位的功能函数, 但是这种方式会导致 `die()` 函数打印出的错误信息在打印之后被立刻清楚. 
