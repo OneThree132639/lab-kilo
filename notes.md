@@ -1458,3 +1458,36 @@ void editorProcessKeypress(void) {
 
 现在在程序中只能通过方向键控制光标的移动. 但是, 如果你的手速很快, 或者你可以尝试调整 `void enableRawMode(void)` 函数中 `raw.c_cc[VTIME] = 1;` 语句的赋值, 
 你可以在程序中通过连续按 `Escape` + `[` + `Shift+A` 的方式实现光标的上移, 这相当于手动输入上箭头的转义序列, 其它方向键同理. 
+
+### 防止光标移动出屏幕
+
+当前程序允许 `E.cx` 和 `E.cy` 变为负数或者超出 `E.screencols` 和 `E.screenrows`, 为了解决这个问题, 加入边界检查: 
+
+```c
+/*** input ***/
+
+void editorMoveCursor(int key) {
+	switch (key) {
+		case ARROW_LEFT: 
+			if (E.cx != 0) {
+				E.cx--; 
+			}
+			break;
+		case ARROW_RIGHT: 
+			if (E.cx != E.screencols - 1) {
+				E.cx++; 
+			}
+			break;
+		case ARROW_UP: 
+			if (E.cy != 0) {
+				E.cy--; 
+			}
+			break;
+		case ARROW_DOWN: 
+			if (E.cy != E.screenrows - 1) {
+				E.cy++; 
+			}
+			break;
+	}
+}
+```
