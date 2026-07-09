@@ -626,3 +626,46 @@ void editorRefreshScreen() {
 ```
 
 `editorDrawRows()` 函数将用于绘制文本的每一行. 当前它的功能是在前 `24` 行的行首绘制一个波浪号, 表明对应行不是文件的一部分. 由于当前并不知道终端的具体大小, 因此我们简单将行数设置为 `24`. 在绘制完成后利用转义字符 `\x1b[H` 将光标移动回屏幕的左上角. 
+
+### 全局状态
+
+接下来我们希望获取终端的行数等信息, 但在此之前, 我们先定义一个结构体 `editorConfig` 来保存全局信息, 并将之前用于保存终端原始设置的全局变量 `orig_termios` 放入其中: 
+
+```c
+/*** data ***/
+
+struct editorConfig {
+	struct termios orig_termios; 
+}; 
+
+struct editorConfig E; 
+
+void disableRawMode() {
+	if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_termios) == -1) {
+		die("tcsetattr"); 
+	}
+}
+
+void enableRawMode() {
+	if (tcgetattr(STDIN_FILENO, &E.orig_termios) == -1) {
+		die("tcgetattr"); 
+	}
+	atexit(disableRawMode);  
+
+	struct termios raw = E.orig_termios; 
+	raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON); 
+	raw.c_oflag &= ~(OPOST); 
+	raw.c_cflag |= (CS8); 
+	raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG); 
+	raw.c_cc[VMIN] = 0; 
+	raw.c_cc[VTIME] = 1; 
+
+	if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) {
+		die("tcsetattr"); 
+	}
+}
+```
+
+并将之前使用的 `orig_termios` 替换为 `E.orig_termios`. 
+
+补充: 在现代 `C` 标准中, 无参数函数的规范写法是在括号中加入 `void` 关键字, 而不是保留空括号(表明未指定参数). 为了避免编译器对该问题的警告, 之后的代码将采用使用 `void` 关键字的写法. 
