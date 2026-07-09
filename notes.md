@@ -1021,3 +1021,46 @@ void editorRefreshScreen(void) {
 其中, 我们使用到了 `l` 和 `h` 转义字符, 它们分别用于复位终端模式和设置终端模式, `?25` 控制光标的可见与不可见. 
 
 部分终端可能不支持隐藏和显示光标的功能, 但是这些代码不会对其它功能造成影响, 因此可以放心保留. 
+
+### 每次清除一行
+
+比起每次清除整个屏幕, 在重绘的时候对对应行进行清除显然是一个更好的方法. 因此, 我们移除代码中的 `\x1b[2J` 转义序列, 转而在每一行末尾用 `\x1b[K` 转义序列. 
+
+```c
+/*** output ***/
+
+void editorDrawRows(struct abuf *ab) {
+	int y; 
+	for (y = 0; y < E.screenrows; y++) {
+		abAppend(ab, "~", 1);
+		
+		abAppend(ab, "\x1b[K", 3); 
+		if (y < E.screenrows - 1) {
+			abAppend(ab, "\r\n", 2);
+		}
+	}
+}
+
+void editorRefreshScreen(void) {
+	struct abuf ab = ABUF_INIT; 
+
+	abAppend(&ab, "\x1b[?25l", 6); 
+	abAppend(&ab, "\x1b[H", 3); 
+
+	editorDrawRows(&ab);
+
+	abAppend(&ab, "\x1b[H", 3); 
+	abAppend(&ab, "\x1b[?25h", 6); 
+	write(STDOUT_FILENO, ab.b, ab.len);
+	abFree(&ab);
+}
+```
+
+`K` 支持的参数与 `J` 类似: 
+| 参数 | 意义 |
+| --- | --- |
+| `0` | 清空光标当前位置到行末尾的所有内容. |
+| `1` | 清空行开头到光标当前位置的所有内容. |
+| `2` | 清空整个行的内容. |
+
+我们使用默认的模式, 即 `0`. 
