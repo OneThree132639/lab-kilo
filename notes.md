@@ -901,3 +901,22 @@ int getWindowSize(int *rows, int *cols) {
 	return 0; 
 }
 ```
+
+### 最后一行
+
+观察我们现在的程序运行, 你可以发现最后一行并没有波浪号, 实际上, 当前的光标指向的是第 `2` 行而不是第 `1` 行, 这是因为我们在输出最后一行的波浪号之后继续输出了 `\r\n`, 导致回车和换行的发生, 使第 `1` 行上移至屏幕之外, 光标回到左上角的时候自然位于第 `2` 行. 因此, 我们需要避免在最后一行的波浪号输出完成之后继续输出 `\r\n`: 
+
+```c
+/*** output ***/
+
+void editorDrawRows(void) {
+	int y; 
+	for (y = 0; y < E.screenrows; y++) {
+		write(STDOUT_FILENO, "~", 1);
+		
+		if (y < E.screenrows - 1) {
+			write(STDOUT_FILENO, "\r\n", 2); 
+		}
+	}
+}
+```
