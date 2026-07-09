@@ -920,3 +920,78 @@ void editorDrawRows(void) {
 	}
 }
 ```
+
+### 添加缓冲
+
+当前我们的程序中存在着大量调用 `write()` 函数的行为. 这对屏幕刷新而言不是一个很好的方法, 容易导致闪屏. 更加好的方法是将需要输出的字符串拼接起来, 然后一次性输出. 因此, 我们需要一个支持添加操作的字符串缓冲. 
+
+```c
+/*** append buffer ***/
+
+struct abuf {
+	char *b; 
+	int len; 
+}; 
+
+#define ABUF_INIT {NULL, 0}
+```
+
+添加缓冲结构体包括一个指向缓冲内存的指针 `b` 和长度 `len`. 常量 `ABUF_INIT` 表示一个空添加缓冲, 它用于构建 `abuf` 类变量. 
+
+接下来, 我们定义 `abAppend()` 操作函数和 `abFree()` 析构函数: 
+
+```c
+#include <string.h>
+
+/*** append buffer ***/
+
+void abAppend(struct abuf *ab, const char *s, int len) {
+	char *new = realloc(ab->b, ab->len + len); 
+
+	if (new == NULL) return; 
+	memcpy(&new[ab->len], s, len); 
+	ab->b = new; 
+	ab->len += len; 
+}
+
+void abFree(struct abuf *ab) {
+	free(ab->b); 
+}
+```
+
+其中, `realloc()` 和 `free()` 函数均来自 `stdlib.h`, `memcpy()` 函数来自 `string.h`. 
+
+ - `void *realloc(void *ptr, size_t size)`: 改变 `ptr` 指向的内存的大小至 `size`, 原大小和 `size` 中的较小值以内的内容将会被复制, 如果发生了内存的整体移动, 原来的内存将会被释放, 如果 `ptr` 为 `NULL`, 则效果等同于分配内存, 如果 `size` 为 `0`, 则效果等同于释放内存. 返回值为指向新分配的地址的指针. 
+ - `void free(void *ptr)`: 释放 `ptr` 指向的内存, 当 `ptr` 为 `NULL` 时不进行任何操作. 
+ - `void *memcpy(void *s1, const void *s2, size_t n)`: 将 `s2` 指向的内存中的前 `n` 个字节复制至 `s1` 的前 `n` 个字节中. 返回值为 `s1`. 
+
+在完成上面两个功能函数之后, 我们的 `abuf` 可以正式投入使用了: 
+
+```c
+/*** output ***/
+
+void editorDrawRows(struct abuf *ab) {
+	int y; 
+	for (y = 0; y < E.screenrows; y++) {
+		abAppend(ab, "~", 1);
+		
+		if (y < E.screenrows - 1) {
+			abAppend(ab, "\r\n", 2);
+		}
+	}
+}
+
+void editorRefreshScreen(void) {
+	struct abuf ab = ABUF_INIT; 
+
+	abAppend(&ab, "\x1b[2J", 4); 
+	abAppend(&ab, "\x1b[H", 3); 
+
+	editorDrawRows(&ab);
+
+	abAppend(&ab, "\x1b[H", 3); 
+	write(STDOUT_FILENO, ab.b, ab.len);
+	abFree(&ab);
+}
+```
+
