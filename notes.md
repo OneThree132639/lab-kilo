@@ -1022,7 +1022,7 @@ void editorRefreshScreen(void) {
 
 部分终端可能不支持隐藏和显示光标的功能, 但是这些代码不会对其它功能造成影响, 因此可以放心保留. 
 
-### 每次清除一行
+### 逐行清除
 
 比起每次清除整个屏幕, 在重绘的时候对对应行进行清除显然是一个更好的方法. 因此, 我们移除代码中的 `\x1b[2J` 转义序列, 转而在每一行末尾用 `\x1b[K` 转义序列. 
 
@@ -1064,3 +1064,71 @@ void editorRefreshScreen(void) {
 | `2` | 清空整个行的内容. |
 
 我们使用默认的模式, 即 `0`. 
+
+### 欢迎信息
+
+现在让我们显示一些欢迎信息, 比如让编辑器的名字和版本号显示在屏幕上三分之一处的位置. 
+
+```c
+/*** defines ***/
+
+#define KILO_VERSION "0.0.1"
+
+/*** output ***/
+
+void editorDrawRows(struct abuf *ab) {
+	int y; 
+	for (y = 0; y < E.screenrows; y++) {
+		if (y == E.screenrows / 3) {
+			char welcome[80]; 
+			int welcomelen = snprintf(welcome, sizeof(welcome), "Kilo editor -- version %s", KILO_VERSION); 
+			if (welcomelen > E.screencols) welcomelen = E.screencols; 
+			abAppend(ab, welcome, welcomelen); 
+		} else {
+			abAppend(ab, "~", 1);
+		}
+		
+		abAppend(ab, "\x1b[K", 3); 
+		if (y < E.screenrows - 1) {
+			abAppend(ab, "\r\n", 2);
+		}
+	}
+}
+```
+
+其中, `int snprintf(char *s, size_t n, const char *format, ...)` 来自 `<stdio.h>`, 将格式化字符串输出至缓冲 `s` 中, `n` 指示缓冲 `s` 的大小. 
+
+此处对过窄的终端进行了适应处理, 将超出终端宽度的部分截去. 
+
+接下来将欢迎信息放到行中央: 
+
+```c
+/*** output ***/
+
+void editorDrawRows(struct abuf *ab) {
+	int y; 
+	for (y = 0; y < E.screenrows; y++) {
+		if (y == E.screenrows / 3) {
+			char welcome[80]; 
+			int welcomelen = snprintf(welcome, sizeof(welcome), "Kilo editor -- version %s", KILO_VERSION); 
+			if (welcomelen > E.screencols) welcomelen = E.screencols; 
+			int padding = (E.screencols - welcomelen) / 2; 
+			if (padding) {
+				abAppend(ab, "~", 1); 
+				padding--; 
+			}
+			while (padding--) abAppend(ab, " ", 1); 
+			abAppend(ab, welcome, welcomelen); 
+		} else {
+			abAppend(ab, "~", 1);
+		}
+		
+		abAppend(ab, "\x1b[K", 3); 
+		if (y < E.screenrows - 1) {
+			abAppend(ab, "\r\n", 2);
+		}
+	}
+}
+```
+
+现在可以看到欢迎信息位于行正中间, 同时对应行的行首有一个波浪号(在终端足够宽的条件下). 
