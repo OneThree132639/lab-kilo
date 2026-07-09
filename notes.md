@@ -1491,3 +1491,96 @@ void editorMoveCursor(int key) {
 	}
 }
 ```
+
+### 页面上滚 `Page Up` 与页面下滚 `Page Down` 键
+
+我们需要实现更多类似方向键的底层按键. 让我们从页面上滚 `Page Up` 和页面下滚 `Page Down` 开始, 它们对应的转义序列分别为 `\x1b[5~` 和 `\x1b[6~`. 
+
+```c
+/*** defines ***/
+
+enum editorKey {
+	ARROW_LEFT = 1000, 
+	ARROW_RIGHT, 
+	ARROW_UP, 
+	ARROW_DOWN, 
+	PAGE_UP, 
+	PAGE_DOWN
+}; 
+
+/*** terminal ***/
+
+int editorReadKey(void) {
+	int nread; 
+	char c; 
+	while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
+		if (nread == -1 && errno != EAGAIN) {
+			die("read"); 
+		}
+	}
+
+	if (c == '\x1b') {
+		char seq[3]; 
+
+		if (read(STDIN_FILENO, &seq[0], 1) != 1) return '\x1b'; 
+		if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b'; 
+
+		if (seq[0] == '[') {
+			if (seq[0] >= '0' && seq[0] <= '9') {
+				if (read(STDIN_FILENO, &seq[2], 1) != 1) return '\x1b'; 
+				if (seq[2] == '~') {
+					switch (seq[1]) {
+						case '5': return PAGE_UP; 
+						case '6': return PAGE_DOWN; 
+					}
+				}
+			} else {
+				switch (seq[1]) {
+					case 'A': return ARROW_UP; 
+					case 'B': return ARROW_DOWN; 
+					case 'C': return ARROW_RIGHT; 
+					case 'D': return ARROW_LEFT; 
+				}
+			}
+		}
+
+		return '\x1b'; 
+	} else {
+		return c; 
+	}
+}
+```
+
+让我们利用 `Page Up` 和 `Page Down` 实现一些功能. 比如, 按下 `Page Up` 时, 让光标移动到屏幕最上方, 按下 `Page Down` 时, 让光标移动到屏幕最下方: 
+
+```c
+/*** input ***/
+
+void editorProcessKeypress(void) {
+	int c = editorReadKey(); 
+
+	switch (c) {
+		case CTRL_KEY('q'): 
+			write(STDOUT_FILENO, "\x1b[2J", 4); 
+			write(STDOUT_FILENO, "\x1b[H", 3); 
+			exit(0); 
+			break; 
+		case PAGE_UP: 
+		case PAGE_DOWN: {
+			int times = E.screenrows; 
+			while (times--) {
+				editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN); 
+			}
+			break;
+		}
+		case ARROW_UP:
+		case ARROW_DOWN: 
+		case ARROW_LEFT: 
+		case ARROW_RIGHT: 
+			editorMoveCursor(c); 
+			break; 
+	}
+}
+```
+
+在带有 `fn` 按键的键盘上, 使用 `fn+↑` 和 `fn+↓` 可能可以实现 `Page Up` 和 `Page Down` 的效果. (暂时未复现, 推测可能是终端的问题)
