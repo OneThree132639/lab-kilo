@@ -995,3 +995,29 @@ void editorRefreshScreen(void) {
 }
 ```
 
+### 在重绘屏幕的时候隐藏光标
+
+当光标位于屏幕中间时, 刷新屏幕会导致光标四处跳动, 造成不好的操作体验. 因此我们希望在屏幕刷新之前隐藏光标, 并在刷新完毕之后重新显示. 
+
+```c
+/*** output ***/
+
+void editorRefreshScreen(void) {
+	struct abuf ab = ABUF_INIT; 
+
+	abAppend(&ab, "\x1b[?25l", 6); 
+	abAppend(&ab, "\x1b[2J", 4); 
+	abAppend(&ab, "\x1b[H", 3); 
+
+	editorDrawRows(&ab);
+
+	abAppend(&ab, "\x1b[H", 3); 
+	abAppend(&ab, "\x1b[?25h", 6); 
+	write(STDOUT_FILENO, ab.b, ab.len);
+	abFree(&ab);
+}
+```
+
+其中, 我们使用到了 `l` 和 `h` 转义字符, 它们分别用于复位终端模式和设置终端模式, `?25` 控制光标的可见与不可见. 
+
+部分终端可能不支持隐藏和显示光标的功能, 但是这些代码不会对其它功能造成影响, 因此可以放心保留. 
