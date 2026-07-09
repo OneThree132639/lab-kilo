@@ -669,3 +669,75 @@ void enableRawMode() {
 并将之前使用的 `orig_termios` 替换为 `E.orig_termios`. 
 
 补充: 在现代 `C` 标准中, 无参数函数的规范写法是在括号中加入 `void` 关键字, 而不是保留空括号(表明未指定参数). 为了避免编译器对该问题的警告, 之后的代码将采用使用 `void` 关键字的写法. 
+
+### 窗口大小, 最简单的方式
+
+在大部分系统中, 可以通过调用 `ioctl()` 函数并使用 `TIOCGWINSZ` 参数获取终端的大小. `TIOCGWINSZ` 指 `Terminal IOCtl Get WINdow SiZe`, 而 `IOCtl` 指 `Input/Output Control`. 
+
+```c
+#include <sys/ioctl.h>
+
+int getWindowSize(int *rows, int *cols) {
+	struct winsize ws; 
+
+	if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
+		return -1; 
+	} 
+	*cols = ws.ws_col; 
+	*rows = ws.ws_row; 
+	return 0; 
+}
+```
+
+`ioctl()` 函数, `TIOCGWINSZ` 宏和 `struct winsize` 结构体均来自 `<sys/ioctl.h>`. 
+
+我们使用返回值来判断获取窗口大小是否成功, 并使用 `*rows` 和 `*cols` 引用来获得具体的行数和列数的值. 这是一种在 `C` 中常见的返回多个值的方式. 
+
+接下来, 向全局状态结构体 `editorConfig` 中添加成员变量 `screenrows` 和 `screencols`, 并调用 `getWindowSize()` 函数获取行数和列数的值. 
+
+```c
+/*** data ***/
+
+struct editorConfig {
+	int screenrows; 
+	int screencols; 
+	struct termios orig_termios; 
+}; 
+
+/*** init ***/
+
+void initEditor(void) {
+	if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
+		die("getWindowSize"); 
+	}
+}
+
+int main(void) {
+	enableRawMode(); 
+	initEditor(); 
+
+	while (1) {
+		editorRefreshScreen(); 
+		editorProcessKeypress(); 
+	}
+
+	return 0; 
+}
+```
+
+`initEditor()` 函数将用于初始化 `E` 结构体中的所有字段. 
+
+接下来我们可以显示正确行数的波浪号, 而不是固定为 `24` 行: 
+
+```c
+/*** output ***/
+
+void editorDrawRows(void) {
+	int y; 
+	for (y = 0; y < E.screenrows; y++) {
+		write(STDOUT_FILENO, "~\r\n", 3); 
+	}
+}
+```
+
+现在我们可以打印出正确行数的波浪号了. 
