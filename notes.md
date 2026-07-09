@@ -1132,3 +1132,109 @@ void editorDrawRows(struct abuf *ab) {
 ```
 
 现在可以看到欢迎信息位于行正中间, 同时对应行的行首有一个波浪号(在终端足够宽的条件下). 
+
+### 移动光标
+
+现在让我们转向输入, 我们希望用户可以控制光标的移动, 首先需要跟踪光标的坐标. 利用全局状态 `editorConfig` 中的变量记录光标当前的坐标: 
+
+```c
+/*** data ***/
+
+struct editorConfig {
+	int cx, cy; 
+	int screenrows; 
+	int screencols; 
+	struct termios orig_termios; 
+}; 
+
+struct editorConfig E; 
+
+/*** init ***/
+
+void initEditor(void) {
+	E.cx = 0; 
+	E.cy = 0; 
+
+	if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
+		die("getWindowSize"); 
+	}
+}
+```
+
+其中, `E.cx` 指光标的所在列, `E.cy` 指光标的所在行. 注意这两个变量的索引基于 `0`, 而转义序列 `H` 的索引基于 `1`. 
+
+接下来通过转义序列在每次刷新的时候将光标移动到 `E.cx` 和 `E.cy` 指向的位置: 
+
+```c
+/*** output ***/
+
+void editorRefreshScreen(void) {
+	struct abuf ab = ABUF_INIT; 
+
+	abAppend(&ab, "\x1b[?25l", 6); 
+	abAppend(&ab, "\x1b[H", 3); 
+
+	editorDrawRows(&ab);
+
+	char buf[32]; 
+	snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1); 
+	abAppend(&ab, buf, strlen(buf)); 
+
+	abAppend(&ab, "\x1b[?25h", 6); 
+	write(STDOUT_FILENO, ab.b, ab.len);
+	abFree(&ab);
+}
+```
+
+其中, `strlen()` 函数来自 `<string.h>`. 其返回以 `\0` 标志结尾的字符串的长度, 不包括 `\0`. 
+
+我们使用一个指定了坐标的 `H` 转义序列代替了原来的默认 `H` 转义序列. 
+
+接下来我们可以尝试通过按键控制光标的移动, 首先从 `W` `A` `S` `D` 这四个按键开始. 按照这几个按键在键盘上的位置, 我们规定: 
+| 按键 | 移动方向 |
+| --- | --- |
+| `W` | 上 |
+| `A` | 左 | 
+| `S` | 下 |
+| `D` | 右 |
+
+```c
+/*** input ***/
+
+void editorMoveCursor(char key) {
+	switch (key) {
+		case 'a': 
+			E.cx--; 
+			break;
+		case 'd': 
+			E.cx++; 
+			break;
+		case 'w': 
+			E.cy--; 
+			break;
+		case 's': 
+			E.cy++; 
+			break;
+	}
+}
+
+void editorProcessKeypress(void) {
+	char c = editorReadKey(); 
+
+	switch (c) {
+		case CTRL_KEY('q'): 
+			write(STDOUT_FILENO, "\x1b[2J", 4); 
+			write(STDOUT_FILENO, "\x1b[H", 3); 
+			exit(0); 
+			break; 
+		case 'w': 
+		case 'a': 
+		case 's': 
+		case 'd': 
+			editorMoveCursor(c); 
+			break; 
+	}
+}
+```
+
+现在程序可以成功使用这些按键控制光标. 
