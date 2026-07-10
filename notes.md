@@ -2009,3 +2009,149 @@ void editorDrawRows(struct abuf *ab) {
 	}
 }
 ```
+
+### 多行
+
+为了存储多行的文本, 我们需要让 `E.row` 变为存储 `erow` 结构体的数组, 由于它是动态变化的, 因此 `E.row` 应当为 `erow` 类型的指针, 并且其初始值为 `NULL`. 需要注意的是, 这一改动会影响很大一部分当前的代码, 因此接下来的一部分步骤完成之后的代码是无法通过编译的. 
+
+```c
+/*** data ***/
+
+struct editorConfig {
+	int cx, cy; 
+	int screenrows; 
+	int screencols; 
+	int numrows; 
+	erow *row; 
+	struct termios orig_termios; 
+}; 
+
+/*** init ***/
+
+void initEditor(void) {
+	E.cx = 0; 
+	E.cy = 0; 
+	E.numrows = 0; 
+	E.row = NULL; 
+
+	if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
+		die("getWindowSize"); 
+	}
+}
+```
+
+接下来, 将在 `editorOpen()` 中初始化 `E.row` 的代码移动至新的函数 `editorAppendRow()` 中, 并将其放入新的区域 `/*** row operations ***/` 中. 
+
+```c
+/*** raw operation ***/
+
+void editorAppendRow(char *s, size_t len) {
+	E.row.size = len; 
+	E.row.chars = malloc(len + 1); 
+	memcpy(E.row.chars, s, len); 
+	E.row.chars[len] = '\0'; 
+	E.numrows = 1; 
+}
+
+/*** file i/o ***/
+
+void editorOpen(char *filename) {
+	FILE *fp = fopen(filename, "r"); 
+	if (!fp) die("fopen"); 
+
+	char *line = NULL; 
+	size_t linecap = 0; 
+	ssize_t linelen; 
+	linelen = getline(&line, &linecap, fp); 
+	if (linelen != -1) {
+		while (linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r')) {
+			linelen--; 
+		}
+		editorAppendRow(line, linelen); 
+	}
+
+	free(line); 
+	fclose(fp); 
+}
+```
+
+我们希望 `editorAppendRow()` 支持添加多行, 这要求每次处理时为新行分配内存并将新行复制到 `E.row` 中的最后一行: 
+
+```c
+/*** raw operation ***/
+
+void editorAppendRow(char *s, size_t len) {
+	E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1)); 
+
+	int at = E.numrows; 
+	E.row[at].size = len; 
+	E.row[at].chars = malloc(len + 1); 
+	memcpy(E.row[at].chars, s, len); 
+	E.row[at].chars[len] = '\0'; 
+	E.numrows++; 
+}
+```
+
+接下来修改 `editorDrawRows()` 函数以支持多行打印: 
+
+```c
+/*** output ***/
+
+void editorDrawRows(struct abuf *ab) {
+	int y; 
+	for (y = 0; y < E.screenrows; y++) {
+		if (y >= E.numrows) {
+			if (E.numrows == 0 && y == E.screenrows / 3) {
+				char welcome[80]; 
+				int welcomelen = snprintf(welcome, sizeof(welcome), "Kilo editor -- version %s", KILO_VERSION); 
+				if (welcomelen > E.screencols) welcomelen = E.screencols; 
+				int padding = (E.screencols - welcomelen) / 2; 
+				if (padding) {
+					abAppend(ab, "~", 1); 
+					padding--; 
+				}
+				while (padding--) abAppend(ab, " ", 1); 
+				abAppend(ab, welcome, welcomelen); 
+			} else {
+				abAppend(ab, "~", 1);
+			}
+		} else {
+			int len = E.row[y].size; 
+			if (len > E.screencols) len = E.screencols; 
+			abAppend(ab, E.row[y].chars, len); 
+		}
+
+		
+		abAppend(ab, "\x1b[K", 3); 
+		if (y < E.screenrows - 1) {
+			abAppend(ab, "\r\n", 2);
+		}
+	}
+}
+```
+
+现在程序可以正常编译了, 但是当前的程序依旧只读取 `1` 行文本. 我们需要修改 `editorOpen()` 以支持多行文本的读取: 
+
+```c
+/*** file i/o ***/
+
+void editorOpen(char *filename) {
+	FILE *fp = fopen(filename, "r"); 
+	if (!fp) die("fopen"); 
+
+	char *line = NULL; 
+	size_t linecap = 0; 
+	ssize_t linelen; 
+	while ((linelen = getline(&line, &linecap, fp)) != -1) {
+		while (linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r')) {
+			linelen--; 
+		}
+		editorAppendRow(line, linelen); 
+	}
+
+	free(line); 
+	fclose(fp); 
+}
+```
+
+现在程序可以正确读取多行文本了. 
