@@ -2966,3 +2966,50 @@ void editorScroll(void) {
 
 现在光标应该可以正常运作了. 
 
+### 使用页面上滚 `Page Up` 和页面下滚 `Page Down` 滚动屏幕
+
+使用页面上滚 `Page Up` 和页面下滚 `Page Down` 实现整个页面的上滚和下滚: 
+
+```c
+/** input ***/
+
+void editorProcessKeypress(void) {
+	int c = editorReadKey(); 
+
+	switch (c) {
+		case CTRL_KEY('q'): 
+			write(STDOUT_FILENO, "\x1b[2J", 4); 
+			write(STDOUT_FILENO, "\x1b[H", 3); 
+			exit(0); 
+			break; 
+		case HOME_KEY: 
+			E.cx = 0;
+			break;
+		case END_KEY: 
+			E.cx = E.screencols - 1; 
+			break; 
+		case PAGE_UP: 
+		case PAGE_DOWN: {
+			if (c == PAGE_UP) {
+				E.cy = E.rowoff; 
+			} else if (c == PAGE_DOWN) {
+				E.cy = E.rowoff + E.screenrows - 1; 
+				if (E.cy > E.numrows) E.cy = E.numrows; 
+			}
+			int times = E.screenrows; 
+			while (times--) {
+				editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN); 
+			}
+			break;
+		}
+		case ARROW_UP:
+		case ARROW_DOWN: 
+		case ARROW_LEFT: 
+		case ARROW_RIGHT: 
+			editorMoveCursor(c); 
+			break; 
+	}
+}
+```
+
+首先根据页面滚动的方向将光标移动至屏幕顶部或屏幕底部, 然后根据页面滚动的方向滚动一整个页面的大小, 实现页面滚动的效果. 
