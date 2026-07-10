@@ -2155,3 +2155,170 @@ void editorOpen(char *filename) {
 ```
 
 现在程序可以正确读取多行文本了. 
+
+### 竖直滚动
+
+现在我们希望用户可以滚动浏览整个文件, 而不是只能浏览文件的前几行. 为了实现这一功能, 我们需要一个新的全局状态变量 `rowoff` 记录当前用户滚向的行. 
+
+```c
+/*** data ***/
+
+struct editorConfig {
+	int cx, cy; 
+	int rowoff; 
+	int screenrows; 
+	int screencols; 
+	int numrows; 
+	erow *row; 
+	struct termios orig_termios; 
+}; 
+
+/*** init ***/
+
+void initEditor(void) {
+	E.cx = 0; 
+	E.cy = 0; 
+	E.rowoff = 0; 
+	E.numrows = 0; 
+	E.row = NULL; 
+
+	if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
+		die("getWindowSize"); 
+	}
+}
+```
+
+将其初始化为 `0`, 表明我们默认滚动到文件的顶部. 
+
+接下来我们根据 `E.rowoff` 的值来显示对应行的文本: 
+
+```c
+/*** output ***/
+
+void editorDrawRows(struct abuf *ab) {
+	int y; 
+	for (y = 0; y < E.screenrows; y++) {
+		int filerow = y + E.rowoff; 
+		if (filerow >= E.numrows) {
+			if (E.numrows == 0 && y == E.screenrows / 3) {
+				char welcome[80]; 
+				int welcomelen = snprintf(welcome, sizeof(welcome), "Kilo editor -- version %s", KILO_VERSION); 
+				if (welcomelen > E.screencols) welcomelen = E.screencols; 
+				int padding = (E.screencols - welcomelen) / 2; 
+				if (padding) {
+					abAppend(ab, "~", 1); 
+					padding--; 
+				}
+				while (padding--) abAppend(ab, " ", 1); 
+				abAppend(ab, welcome, welcomelen); 
+			} else {
+				abAppend(ab, "~", 1);
+			}
+		} else {
+			int len = E.row[filerow].size; 
+			if (len > E.screencols) len = E.screencols; 
+			abAppend(ab, E.row[filerow].chars, len); 
+		}
+
+		
+		abAppend(ab, "\x1b[K", 3); 
+		if (y < E.screenrows - 1) {
+			abAppend(ab, "\r\n", 2);
+		}
+	}
+}
+```
+
+接下来的问题是在哪里改变 `E.rowoff` 的值. 我们采取如下策略: 在刷新屏幕之前检查光标是否超出了屏幕的边界, 如果超出了则调整 `E.rowoff` 的值以保持光标始终在屏幕中. 我们将检查并调整的逻辑放在新的函数 `editorScroll()` 中, 并在刷新屏幕之前调用它: 
+
+```c
+/*** output ***/
+
+void editorScroll(void) {
+	if (E.cy < E.rowoff) {
+		E.rowoff = E.cy; 
+	} 
+	if (E.cy >= E.rowoff + E.screenrows) {
+		E.rowoff = E.cy - E.screenrows + 1; 
+	}
+}
+
+void editorRefreshScreen(void) {
+	editorScroll();
+
+	struct abuf ab = ABUF_INIT; 
+
+	abAppend(&ab, "\x1b[?25l", 6); 
+	abAppend(&ab, "\x1b[H", 3); 
+
+	editorDrawRows(&ab);
+
+	char buf[32]; 
+	snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1); 
+	abAppend(&ab, buf, strlen(buf)); 
+
+	abAppend(&ab, "\x1b[?25h", 6); 
+	write(STDOUT_FILENO, ab.b, ab.len);
+	abFree(&ab);
+}
+```
+
+接下来, 我们允许光标的坐标超出屏幕的范围, 但是不超出文件的范围: 
+
+```c
+/*** input ***/
+
+void editorMoveCursor(int key) {
+	switch (key) {
+		case ARROW_LEFT: 
+			if (E.cx != 0) {
+				E.cx--; 
+			}
+			break;
+		case ARROW_RIGHT: 
+			if (E.cx != E.screencols - 1) {
+				E.cx++; 
+			}
+			break;
+		case ARROW_UP: 
+			if (E.cy != 0) {
+				E.cy--; 
+			}
+			break;
+		case ARROW_DOWN: 
+			if (E.cy < E.numrows) {
+				E.cy++; 
+			}
+			break;
+	}
+}
+```
+
+现在在程序中可以通过按下方向键浏览文件的剩余部分了. (如果你打开了一份含有 `Tab` 字符的文件, 你可能会发现这些字符可能没有被正确消除, 我们将在之后解决这一问题. 你可以尝试打开一份没有 `Tab` 字符的文件进行测试. )
+
+如果你尝试向上回滚, 你会发现光标并没有按照预想的情况移动, 这是因为当前的 `E.cy` 不再指向屏幕上的坐标, 而是在文件中的坐标, 因此, 我们在设置坐标位置的时候需要减去 `E.rowoff` 偏移值: 
+
+```c
+/*** output ***/
+
+void editorRefreshScreen(void) {
+	editorScroll();
+
+	struct abuf ab = ABUF_INIT; 
+
+	abAppend(&ab, "\x1b[?25l", 6); 
+	abAppend(&ab, "\x1b[H", 3); 
+
+	editorDrawRows(&ab);
+
+	char buf[32]; 
+	snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, E.cx + 1); 
+	abAppend(&ab, buf, strlen(buf)); 
+
+	abAppend(&ab, "\x1b[?25h", 6); 
+	write(STDOUT_FILENO, ab.b, ab.len);
+	abFree(&ab);
+}
+```
+
+现在程序可以正常滚动了. 
