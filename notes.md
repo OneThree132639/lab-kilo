@@ -2830,3 +2830,139 @@ void editorUpdateRow(erow *row) {
 }
 ```
 
+这使得代码更易读的同时方便我们设置 `Tab` 步长. 
+
+### `Tab` 与光标
+
+光标在 `Tab` 附近移动的时候, 应当跳至 `Tab` 的停止点, 而不应当出现在 `Tab` 中间. 这也是当前的程序在 `Tab` 存在的行中光标无法移动至行尾的原因. 为了解决这个问题, 我们需要引入新的变量 `E.rx` 用于记录 `erow.render` 的索引, 而原来的 `E.cx` 用于记录 `erow.chars` 的索引. `E.rx` 比 `E.cx` 大一个与对应行中经过的 `Tab` 的个数正相关的数. 
+
+在初始化的时候将 `E.rx` 设置为 `0`. 
+
+```c
+/*** data ***/
+
+struct editorConfig {
+	int cx, cy; 
+	int rx; 
+	int rowoff; 
+	int coloff;
+	int screenrows; 
+	int screencols; 
+	int numrows; 
+	erow *row; 
+	struct termios orig_termios; 
+}; 
+
+/*** init ***/
+
+void initEditor(void) {
+	E.cx = 0; 
+	E.cy = 0; 
+	E.rx = 0; 
+	E.rowoff = 0; 
+	E.coloff = 0; 
+	E.numrows = 0; 
+	E.row = NULL; 
+
+	if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
+		die("getWindowSize"); 
+	}
+}
+```
+
+我们先在 `editorScroll()` 函数中简单将 `E.cx` 替换为 `E.rx`. 
+
+```c
+/*** output ***/
+
+void editorScroll(void) {
+	E.rx = E.cx; 
+
+	if (E.cy < E.rowoff) {
+		E.rowoff = E.cy; 
+	} 
+	if (E.cy >= E.rowoff + E.screenrows) {
+		E.rowoff = E.cy - E.screenrows + 1; 
+	}
+	if (E.rx < E.coloff) {
+		E.coloff = E.rx; 
+	}
+	if (E.rx >= E.coloff + E.screencols) {
+		E.coloff = E.rx - E.screencols + 1; 
+	}
+}
+```
+
+接下来, 在 `editorRefreshScreen()` 函数中也将 `E.cx` 修改为 `E.rx`: 
+
+```c
+/*** output ***/
+
+void editorRefreshScreen(void) {
+	editorScroll();
+
+	struct abuf ab = ABUF_INIT; 
+
+	abAppend(&ab, "\x1b[?25l", 6); 
+	abAppend(&ab, "\x1b[H", 3); 
+
+	editorDrawRows(&ab);
+
+	char buf[32]; 
+	snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.rx - E.coloff) + 1); 
+	abAppend(&ab, buf, strlen(buf)); 
+
+	abAppend(&ab, "\x1b[?25h", 6); 
+	write(STDOUT_FILENO, ab.b, ab.len);
+	abFree(&ab);
+}
+```
+
+接下来就是在 `editorScroll()`函数中将 `E.cx` 转换为 `E.rx`. 我们将转换的过程放在 `editorRowCxToRx()` 函数中. 转换的逻辑很简单: 计数本行 `E.cx` 左侧一共有多少个 `Tab`, 计算这些 `Tab` 占据的列数: 
+
+```c
+/*** row operations ***/
+
+int editorRowCxToRx(erow *row, int cx) {
+	int rx = 0; 
+	int j; 
+	for (j = 0; j < cx; j++) {
+		if (row->chars[j] == '\t') {
+			rx += (KILO_TAB_STOP - 1) - (rx % KILO_TAB_STOP); 
+		}
+		rx++; 
+	}
+	return rx; 
+}
+```
+
+同样地, 在遇到 `Tab` 的时候 `rx` 增加至下一个 `Tab` 停止点处. 
+
+在 `editorScroll()` 函数的顶部调用 `editorRowCxToRx()` 以正确设置 `E.rx`: 
+
+```c
+/*** output ***/
+
+void editorScroll(void) {
+	E.rx = 0; 
+	if (E.cy < E.numrows) {
+		E.rx = editorRowCxToRx(&E.row[E.cy], E.cx); 
+	}
+
+	if (E.cy < E.rowoff) {
+		E.rowoff = E.cy; 
+	} 
+	if (E.cy >= E.rowoff + E.screenrows) {
+		E.rowoff = E.cy - E.screenrows + 1; 
+	}
+	if (E.rx < E.coloff) {
+		E.coloff = E.rx; 
+	}
+	if (E.rx >= E.coloff + E.screencols) {
+		E.coloff = E.rx - E.screencols + 1; 
+	}
+}
+```
+
+现在光标应该可以正常运作了. 
+
