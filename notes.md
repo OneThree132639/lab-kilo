@@ -2473,3 +2473,42 @@ void editorRefreshScreen(void) {
 ```
 
 这样, 水平滚动也完成了. 
+
+### 限制向右滚动
+
+当前的 `E.cx` 和 `E.cy` 指的是光标在文件中的位置, 而不是在屏幕上的位置. 我们希望将 `E.cx` 和 `E.cy` 约束在一定的有效值内以避免用户控制光标移动超出文本的范围, 唯一的例外是光标可以移动至该行文本的最后一个字符之后的一格以便新文本的插入. 
+
+首先, 让我们限制光标不超出当前行的末尾: 
+
+```c
+/*** input ***/
+
+void editorMoveCursor(int key) {
+	erow *row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy]; 
+
+	switch (key) {
+		case ARROW_LEFT: 
+			if (E.cx != 0) {
+				E.cx--; 
+			}
+			break;
+		case ARROW_RIGHT: 
+			if (row && E.cx < row->size) {
+				E.cx++; 
+			}
+			break;
+		case ARROW_UP: 
+			if (E.cy != 0) {
+				E.cy--; 
+			}
+			break;
+		case ARROW_DOWN: 
+			if (E.cy < E.numrows) {
+				E.cy++; 
+			}
+			break;
+	}
+}
+```
+
+由于 `E.cy` 允许指向文件行数多 `1` 行的位置(为了后续插入新行), 在 `editorMoveCursor()` 函数的开头需要检查是否对应行是否存在有效的指针 `erow` . 
