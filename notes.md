@@ -3059,3 +3059,199 @@ void editorProcessKeypress(void) {
 	}
 }
 ```
+
+另外, 按 `Home` 键移动至行首的功能已经实现, 因为在此之前我们已经令 `E.cx` 与文件行相关而不是与屏幕行相关. 
+
+### 状态条
+
+在进入实现文本编辑之前, 让我们先实现状态条, 在状态条中会显示文件名称、文件总行数、当前所在行等信息. 在之后我们还会添加标识以表示文件在上一次保存之后是否存在修改, 以及在实现语法高亮的时候显示文件类型. 
+
+首先, 为状态条在屏幕底部留出 `1` 行的空间: 
+
+```c
+/*** output ***/
+
+void editorDrawRows(struct abuf *ab) {
+	int y; 
+	for (y = 0; y < E.screenrows; y++) {
+		int filerow = y + E.rowoff; 
+		if (filerow >= E.numrows) {
+			if (E.numrows == 0 && y == E.screenrows / 3) {
+				char welcome[80]; 
+				int welcomelen = snprintf(welcome, sizeof(welcome), "Kilo editor -- version %s", KILO_VERSION); 
+				if (welcomelen > E.screencols) welcomelen = E.screencols; 
+				int padding = (E.screencols - welcomelen) / 2; 
+				if (padding) {
+					abAppend(ab, "~", 1); 
+					padding--; 
+				}
+				while (padding--) abAppend(ab, " ", 1); 
+				abAppend(ab, welcome, welcomelen); 
+			} else {
+				abAppend(ab, "~", 1);
+			}
+		} else {
+			int len = E.row[filerow].rsize - E.coloff; 
+			if (len < 0) len = 0; 
+			if (len > E.screencols) len = E.screencols; 
+			abAppend(ab, &E.row[filerow].render[E.coloff], len); 
+		}
+
+		
+		abAppend(ab, "\x1b[K", 3); 
+		abAppend(ab, "\r\n", 2);
+	}
+}
+
+/*** init ***/
+
+void initEditor(void) {
+	E.cx = 0; 
+	E.cy = 0; 
+	E.rx = 0; 
+	E.rowoff = 0; 
+	E.coloff = 0; 
+	E.numrows = 0; 
+	E.row = NULL; 
+
+	if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
+		die("getWindowSize"); 
+	}
+	E.screenrows -= 1; 
+}
+```
+
+在 `initEditor()` 中将 `E.screenrows` 减少了 `1`, 为状态条提供了空间. 同时, 移除了`editorDrawRows()` 中为了避免在最后一行加上换行符而使用的条件分支. 
+
+值得注意的是, 在经过这些改动之后, 除了空出最后一行之外, 程序依旧可以正常执行浏览功能. 
+
+为了让状态条更醒目, 我们希望它以反转色的形式显示, 也就是说, 如果终端原本是在白色背景上的黑色字, 那么状态条部分就是在黑色背景上的白色字. 使用转义序列 `\x1b[7m` 切换到反转色模式, 使用 `\x1b[m` 可以切换回来. 首先让我们绘制一个全为空格的状态条: 
+
+```c
+/*** output ***/
+
+void editorDrawStatusBar(struct abuf *ab) {
+	abAppend(ab, "\x1b[7m", 4); 
+	int len = 0; 
+	while (len < E.screencols) {
+		abAppend(ab, " ", 1); 
+		len++; 
+	}
+	abAppend(ab, "\x1b[m", 3); 
+}
+```
+
+转义序列 `m` 允许在其之后打印的文本获得不同的属性, 如 `1` 表示粗体, `4` 表示下划线, `5` 表示闪烁, `7` 表示反转色, `0` 表示清除属性. 一次性启用多个属性的情况, 属性之间通过 `;` 分隔. 
+
+接下来让我们在状态条中加入文件名. 在全局状态 `editorConfig` 中新建一个字段 `filename` 用于存储文件名. 
+
+```c
+/*** data ***/
+
+struct editorConfig {
+	int cx, cy; 
+	int rx; 
+	int rowoff; 
+	int coloff;
+	int screenrows; 
+	int screencols; 
+	int numrows; 
+	erow *row; 
+	char *filename; 
+	struct termios orig_termios; 
+}; 
+
+/*** file i/o ***/
+
+void editorOpen(char *filename) {
+	free(E.filename); 
+	E.filename = strdup(filename); 
+
+	FILE *fp = fopen(filename, "r"); 
+	if (!fp) die("fopen"); 
+
+	char *line = NULL; 
+	size_t linecap = 0; 
+	ssize_t linelen; 
+	while ((linelen = getline(&line, &linecap, fp)) != -1) {
+		while (linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r')) {
+			linelen--; 
+		}
+		editorAppendRow(line, linelen); 
+	}
+
+	free(line); 
+	fclose(fp); 
+}
+
+/*** init ***/
+
+void initEditor(void) {
+	E.cx = 0; 
+	E.cy = 0; 
+	E.rx = 0; 
+	E.rowoff = 0; 
+	E.coloff = 0; 
+	E.numrows = 0; 
+	E.row = NULL; 
+	E.filename = NULL; 
+
+	if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
+		die("getWindowSize"); 
+	}
+	E.screenrows -= 1; 
+}
+```
+
+ - `char *strdup(const char *s1)`: 来自 `<string.h>`. 返回一个可以被 `free()` 函数释放的指向 `s1` 的拷贝的指针, 如果字符串创建失败, 则返回空指针. 
+
+接下来, 将文件名显示在状态条中. 如果没有传入文件名参数, 显示 `[No Name]`. 
+
+```c
+/*** output ***/
+
+void editorDrawStatusBar(struct abuf *ab) {
+	abAppend(ab, "\x1b[7m", 4); 
+	char status[80]; 
+	int len = snprintf(status, sizeof(status), "%.20s - %d lines", E.filename ? E.filename : "[No Name]", E.numrows); 
+	if (len > E.screencols) len = E.screencols; 
+	abAppend(ab, status, len); 
+	while (len < E.screencols) {
+		abAppend(ab, " ", 1); 
+		len++; 
+	}
+	abAppend(ab, "\x1b[m", 3); 
+}
+```
+
+当窗口宽度不足的时候, 对状态条输出信息进行裁剪. 对于过剩的部分, 绘制空格以保证反转色部分填充一整行. 
+
+接下来, 显示当前所在行的编号在状态条的右边缘. 
+
+```c
+/*** output ***/
+
+void editorDrawStatusBar(struct abuf *ab) {
+	abAppend(ab, "\x1b[7m", 4); 
+	char status[80], rstatus[80];
+	int len = snprintf(status, sizeof(status), "%.20s - %d lines", E.filename ? E.filename : "[No Name]", E.numrows); 
+	int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy + 1, E.numrows); 
+	if (len > E.screencols) len = E.screencols; 
+	abAppend(ab, status, len); 
+	while (len < E.screencols) {
+		if (E.screencols - len == rlen) {
+			abAppend(ab, rstatus, rlen); 
+			break; 
+		} else {
+			abAppend(ab, " ", 1); 
+			len++; 
+		}
+	}
+	abAppend(ab, "\x1b[m", 3); 
+}
+```
+
+由于 `E.cy` 的索引基于 `0`, 显示行号的时候需要加 `1`. 
+
+当终端宽度不足的时候, 右侧的行号信息不会显示. 
+
