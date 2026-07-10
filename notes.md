@@ -1583,4 +1583,192 @@ void editorProcessKeypress(void) {
 }
 ```
 
-在带有 `fn` 按键的键盘上, 使用 `fn+↑` 和 `fn+↓` 可能可以实现 `Page Up` 和 `Page Down` 的效果. (暂时未复现, 推测可能是终端的问题)
+在带有 `fn` 按键的键盘上, 使用 `fn+↑` 和 `fn+↓` 可能可以实现 `Page Up` 和 `Page Down` 的效果. (暂时未在 MacOS 上复现, 推测可能是终端的问题. 在 WSL 上使用 `Page Up` 和 `Page Down` 也未成功, 需要进一步实验等)
+
+### `Home` 和 `End` 键
+
+接下来让我们实现 `Home` 键和 `End` 键的功能. 根据不同的操作系统和终端模拟器, `Home` 键对应的转义序列可能是 `\x1b[1~`, `\x1b[7~`, `\x1b[H` 或者 `\x1bOH`, `End` 键对应的转义序列可能是 `\x1b[4~`, `\x1b[8~`, `\x1b[F` 或者 `\x1bOF`. 我们需要处理这些所有的可能情况: 
+
+```c
+/*** defines ***/
+
+enum editorKey {
+	ARROW_LEFT = 1000, 
+	ARROW_RIGHT, 
+	ARROW_UP, 
+	ARROW_DOWN, 
+	HOME_KEY, 
+	END_KEY, 
+	PAGE_UP, 
+	PAGE_DOWN
+}; 
+
+/*** terminal ***/
+
+int editorReadKey(void) {
+	int nread; 
+	char c; 
+	while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
+		if (nread == -1 && errno != EAGAIN) {
+			die("read"); 
+		}
+	}
+
+	if (c == '\x1b') {
+		char seq[3]; 
+
+		if (read(STDIN_FILENO, &seq[0], 1) != 1) return '\x1b'; 
+		if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b'; 
+
+		if (seq[0] == '[') {
+			if (seq[0] >= '0' && seq[0] <= '9') {
+				if (read(STDIN_FILENO, &seq[2], 1) != 1) return '\x1b'; 
+				if (seq[2] == '~') {
+					switch (seq[1]) {
+						case '1': return HOME_KEY; 
+						case '4': return END_KEY; 
+						case '5': return PAGE_UP; 
+						case '6': return PAGE_DOWN; 
+						case '7': return HOME_KEY; 
+						case '8': return END_KEY; 
+					}
+				}
+			} else {
+				switch (seq[1]) {
+					case 'A': return ARROW_UP; 
+					case 'B': return ARROW_DOWN; 
+					case 'C': return ARROW_RIGHT; 
+					case 'D': return ARROW_LEFT; 
+					case 'F': return END_KEY; 
+					case 'H': return HOME_KEY; 
+				}
+			}
+		} else if (seq[0] == 'O') {
+			switch (seq[1]) {
+				case 'F': return END_KEY; 
+				case 'H': return HOME_KEY; 
+			}
+		}
+
+		return '\x1b'; 
+	} else {
+		return c; 
+	}
+}
+```
+
+然后我们可以为 `Home` 和 `End` 键添加功能, 比如, 当按下 `Home` 键时, 让光标移动到屏幕的最左端, 当按下 `End` 键时, 让光标移动到屏幕的最右端: 
+
+```c
+/*** input ***/
+
+void editorProcessKeypress(void) {
+	int c = editorReadKey(); 
+
+	switch (c) {
+		case CTRL_KEY('q'): 
+			write(STDOUT_FILENO, "\x1b[2J", 4); 
+			write(STDOUT_FILENO, "\x1b[H", 3); 
+			exit(0); 
+			break; 
+		case HOME_KEY: 
+			E.cx = 0;
+			break;
+		case END_KEY: 
+			E.cx = E.screencols - 1; 
+			break; 
+		case PAGE_UP: 
+		case PAGE_DOWN: {
+			int times = E.screenrows; 
+			while (times--) {
+				editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN); 
+			}
+			break;
+		}
+		case ARROW_UP:
+		case ARROW_DOWN: 
+		case ARROW_LEFT: 
+		case ARROW_RIGHT: 
+			editorMoveCursor(c); 
+			break; 
+	}
+}
+```
+
+在带有 `fn` 按键的键盘上, 使用 `fn+←` 和 `fn+→` 可能可以实现 `Page Up` 和 `Page Down` 的效果. (在 MacOS Terminal 上同样未成功)
+
+### 删除键 `Delete`
+
+删除键对应的转义序列为 `\x1b[3~`, 我们将其简单添加至程序中, 暂时不为其添加功能: 
+
+```c
+/*** defines ***/
+
+enum editorKey {
+	ARROW_LEFT = 1000, 
+	ARROW_RIGHT, 
+	ARROW_UP, 
+	ARROW_DOWN, 
+	DEL_KEY, 
+	HOME_KEY, 
+	END_KEY, 
+	PAGE_UP, 
+	PAGE_DOWN
+}; 
+
+/*** terminal ***/
+
+int editorReadKey(void) {
+	int nread; 
+	char c; 
+	while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
+		if (nread == -1 && errno != EAGAIN) {
+			die("read"); 
+		}
+	}
+
+	if (c == '\x1b') {
+		char seq[3]; 
+
+		if (read(STDIN_FILENO, &seq[0], 1) != 1) return '\x1b'; 
+		if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b'; 
+
+		if (seq[0] == '[') {
+			if (seq[0] >= '0' && seq[0] <= '9') {
+				if (read(STDIN_FILENO, &seq[2], 1) != 1) return '\x1b'; 
+				if (seq[2] == '~') {
+					switch (seq[1]) {
+						case '1': return HOME_KEY; 
+						case '3': return DEL_KEY; 
+						case '4': return END_KEY; 
+						case '5': return PAGE_UP; 
+						case '6': return PAGE_DOWN; 
+						case '7': return HOME_KEY; 
+						case '8': return END_KEY; 
+					}
+				}
+			} else {
+				switch (seq[1]) {
+					case 'A': return ARROW_UP; 
+					case 'B': return ARROW_DOWN; 
+					case 'C': return ARROW_RIGHT; 
+					case 'D': return ARROW_LEFT; 
+					case 'F': return END_KEY; 
+					case 'H': return HOME_KEY; 
+				}
+			}
+		} else if (seq[0] == 'O') {
+			switch (seq[1]) {
+				case 'F': return END_KEY; 
+				case 'H': return HOME_KEY; 
+			}
+		}
+
+		return '\x1b'; 
+	} else {
+		return c; 
+	}
+}
+```
+
+在带有 `fn` 按键的键盘上, 使用 `fn+Backspace` 可能可以实现 `Delete` 的效果. 
