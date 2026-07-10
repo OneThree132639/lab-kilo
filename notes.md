@@ -1771,4 +1771,241 @@ int editorReadKey(void) {
 }
 ```
 
-在带有 `fn` 按键的键盘上, 使用 `fn+Backspace` 可能可以实现 `Delete` 的效果. 
+在带有 `fn` 按键的键盘上, 使用 `fn+Backspace` 可能可以实现 `Delete` 的效果. (在 MacOS Terminal 上捕捉到该信号. )
+
+## 文本查看器
+
+### 行查看器
+
+首先创建一个数据类型存储编辑器中一行的文本: 
+
+```c
+/*** data ***/
+
+typedef struct erow {
+	int size; 
+	char *chars; 
+} erow; 
+
+struct editorConfig {
+	int cx, cy; 
+	int screenrows; 
+	int screencols; 
+	int numrows; 
+	erow row; 
+	struct termios orig_termios; 
+}; 
+
+/*** init ***/
+
+void initEditor(void) {
+	E.cx = 0; 
+	E.cy = 0; 
+	E.numrows = 0; 
+
+	if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
+		die("getWindowSize"); 
+	}
+}
+```
+
+`erow` 是 `editor row` 的意思, 存储一个指向动态字符数组的指针. 使用 `typedef` 让我们可以指代这个数据类型为 `erow` 而不必使用 `struct erow`. 
+
+在全局状态 `editorConfig` 中, 我们添加了 `erow` 类型的 `row` 字段和 `int` 类型的 `numrows` 字段. 由于我们当前只希望显示 `1` 行的文本, 因此 `numrows` 的取值为 `0` 或 `1`, 在 `initEditor()` 函数中将其初始化为 `0`. 
+
+接下来让我们往 `erow` 中填入一些文本, 暂时不考虑读取其它文件的内容, 而是硬编码 `"Hello, world!"`. 
+
+```c
+/*** includes ***/
+
+#include <sys/types.h>
+
+/*** file i/o ***/
+
+void editorOpen(void) {
+	char *line = "Hello, world!";
+	ssize_t linelen = 13; 
+	
+	E.row.size = linelen; 
+	E.row.chars = malloc(linelen + 1); 
+	memcpy(E.row.chars, line, linelen); 
+	E.row.chars[linelen] = '\0'; 
+	E.numrows = 1; 
+}
+
+/*** init ***/
+
+int main(void) {
+	enableRawMode(); 
+	initEditor(); 
+	editorOpen(); 
+
+	while (1) {
+		editorRefreshScreen(); 
+		editorProcessKeypress(); 
+	}
+
+	return 0; 
+}
+```
+
+其中, `malloc()` 函数来自 `<stdlib.h>`, `ssize_t` 来自 `<sys/types.h>`. 
+
+ - `void *malloc(size_t size)`: 分配 `size` 个字节的内存并返回一个指向该内存头部的指针. 
+ - `ssize_t`: 有符号整数类型, 允许 `-1` 等值. 
+
+`editorOpen()` 函数将用于从磁盘中打开并读取文件, 因此我们将其放入新的 `/*** file i/o ***/` 区域中. 
+
+接下来显示这段文本: 
+
+```c
+/*** output ***/
+
+void editorDrawRows(struct abuf *ab) {
+	int y; 
+	for (y = 0; y < E.screenrows; y++) {
+		if (y >= E.numrows) {
+			if (y == E.screenrows / 3) {
+				char welcome[80]; 
+				int welcomelen = snprintf(welcome, sizeof(welcome), "Kilo editor -- version %s", KILO_VERSION); 
+				if (welcomelen > E.screencols) welcomelen = E.screencols; 
+				int padding = (E.screencols - welcomelen) / 2; 
+				if (padding) {
+					abAppend(ab, "~", 1); 
+					padding--; 
+				}
+				while (padding--) abAppend(ab, " ", 1); 
+				abAppend(ab, welcome, welcomelen); 
+			} else {
+				abAppend(ab, "~", 1);
+			}
+		} else {
+			int len = E.row.size; 
+			if (len > E.screencols) len = E.screencols; 
+			abAppend(ab, E.row.chars, len); 
+		}
+
+		
+		abAppend(ab, "\x1b[K", 3); 
+		if (y < E.screenrows - 1) {
+			abAppend(ab, "\r\n", 2);
+		}
+	}
+}
+```
+
+我们将之前显示波浪号 `~` 和项目名称与版本号的代码逻辑打包进一个判断分支中, 另一个分支用于打印正常的文本内容. 同样的, 如果文本内容超出了终端的宽度, 它会受到截断. 
+
+接下来, 让我们真正读取一个文件: 
+
+```c
+/*** file i/o ***/
+
+void editorOpen(char *filename) {
+	FILE *fp = fopen(filename, "r"); 
+	if (!fp) die("fopen"); 
+
+	char *line = NULL; 
+	size_t linecap = 0; 
+	ssize_t linelen; 
+	linelen = getline(&line, &linecap, fp); 
+	if (linelen != -1) {
+		while (linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r')) {
+			linelen--; 
+		}
+		E.row.size = linelen; 
+		E.row.chars = malloc(linelen + 1); 
+		memcpy(E.row.chars, line, linelen); 
+		E.row.chars[linelen] = '\0'; 
+		E.numrows = 1; 
+	}
+
+	free(line); 
+	fclose(fp); 
+}
+
+/*** init ***/
+
+int main(int argc, char *argv[]) {
+	enableRawMode(); 
+	initEditor(); 
+	if (argc >= 2) {
+		editorOpen(argv[1]); 
+	}
+
+	while (1) {
+		editorRefreshScreen(); 
+		editorProcessKeypress(); 
+	}
+
+	return 0; 
+}
+```
+
+ - `FILE`: 来自 `<stdio.h>`. 包含了管理文件流的所有信息(文件缓冲区指针, 当前读写位置, 错误状态等). 
+ - `FILE *fopen(const char *filename, const char *mode)`: 来自 `<stdio.h>`. 打开 `filename` 字符串对应路径的文件, 并返回该文件的文件流指针. `mode` 的值为 `r` 或 `rb` 时表示读取文件. 
+ - `ssize_t getline(char **lineptr, size_t *n, FILE *stream)`: 来自 `<stdio.h>`. 其中 `lineptr` 是指向字符指针的指针, 如果为 `NULL`, 则 `getline() ` 函数会为其分配内存, `n` 为指向存储分配缓冲区大小的指针, `stream` 为要读取的文件流指针. 返回值为成功读取的字符数(不包括末尾的 `\0`), 如果读取失败(如已经到达文件末尾)则返回 `-1`. 
+
+`argc` 是命令行参数的个数, `argv` 是一个指向参数的指针数组, `argv[0]` 为可执行文件名, 在本项目下, `argv[0]` 一般为 `kilo` . `argv[1]` 为第一个参数, 我们期望是文件名. 
+
+在当前, 我们只读取 `1` 行文本, 在之后读取多行文本时将会重复使用 `getline()` 函数, 它自动管理内存的功能非常有效. 
+
+我们去除了读取到的行文本末尾的 `\r` 和 `\n` 字符, 因为我们通过 `erow` 手动管理一行的文本, 因此在此处我们没有必要将它们打印出来. 
+
+由于 `getline()` 函数属于 `<stdio.h>` 的 GNU 扩展函数, 对于部分编译器, 其声明可能不会被激活, 因此需要在头文件之前加上功能测试宏 `feature test macro`: 
+
+```c
+/*** includes ***/
+
+#define _DEFAULT_SOURCE
+#define _BSD_SOURCE
+#define _GNU_SOURCE
+
+#include <ctype.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <sys/types.h>
+#include <termios.h>
+#include <unistd.h>
+```
+
+最后, 我们修改一个小地方: 只有当没有输入参数的时候显示程序名称与版本号: 
+
+```c
+/*** output ***/
+
+void editorDrawRows(struct abuf *ab) {
+	int y; 
+	for (y = 0; y < E.screenrows; y++) {
+		if (y >= E.numrows) {
+			if (E.numrows == 0 && y == E.screenrows / 3) {
+				char welcome[80]; 
+				int welcomelen = snprintf(welcome, sizeof(welcome), "Kilo editor -- version %s", KILO_VERSION); 
+				if (welcomelen > E.screencols) welcomelen = E.screencols; 
+				int padding = (E.screencols - welcomelen) / 2; 
+				if (padding) {
+					abAppend(ab, "~", 1); 
+					padding--; 
+				}
+				while (padding--) abAppend(ab, " ", 1); 
+				abAppend(ab, welcome, welcomelen); 
+			} else {
+				abAppend(ab, "~", 1);
+			}
+		} else {
+			int len = E.row.size; 
+			if (len > E.screencols) len = E.screencols; 
+			abAppend(ab, E.row.chars, len); 
+		}
+
+		
+		abAppend(ab, "\x1b[K", 3); 
+		if (y < E.screenrows - 1) {
+			abAppend(ab, "\r\n", 2);
+		}
+	}
+}
+```
