@@ -2043,7 +2043,7 @@ void initEditor(void) {
 接下来, 将在 `editorOpen()` 中初始化 `E.row` 的代码移动至新的函数 `editorAppendRow()` 中, 并将其放入新的区域 `/*** row operations ***/` 中. 
 
 ```c
-/*** raw operation ***/
+/*** raw operations ***/
 
 void editorAppendRow(char *s, size_t len) {
 	E.row.size = len; 
@@ -2078,7 +2078,7 @@ void editorOpen(char *filename) {
 我们希望 `editorAppendRow()` 支持添加多行, 这要求每次处理时为新行分配内存并将新行复制到 `E.row` 中的最后一行: 
 
 ```c
-/*** raw operation ***/
+/*** raw operations ***/
 
 void editorAppendRow(char *s, size_t len) {
 	E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1)); 
@@ -2652,3 +2652,181 @@ void editorMoveCursor(int key) {
 ```
 
 在此处我们要避免光标不在最后一行(即 `row` 指针为 `NULL`)的情况. 
+
+### 渲染 `Tab`
+
+运行 `./kilo Makefile`, 可以发现第 `2` 行的 `Tab` 占据了 `8` 列. `Tab` 占据的具体列数取决于终端及其设置. 
+
+为了解决这个问题, 我们在 `erow` 结构体中添加一个新的字符串字段 `render` 表示对应行实际打印到屏幕上的字符. 当前我们暂时只使用 `render` 渲染 `Tab` 字符, 在之后我们会使用其打印更多不可打印的字符如将 `Ctrl+A` 打印为 `^A`, 这也是在终端中表示控制字符的通用方法. 
+
+此外, `Tab` 的作用是将光标移动至下一个 `Tab` 停止点, 而不会对 `Tab` 中间的字符进行操作, 这是导致渲染出现问题的主要原因, 也是我们希望将 `Tab` 渲染为多个空格(`Space`)的原因. 
+
+那么, 首先添加 `render` 字段和 `rsize` 字段, `rsize` 字段用于记录 `render` 字符串的长度. 并完成它们的初始化. 
+
+```c
+/*** data ***/
+
+typedef struct erow {
+	int size; 
+	int rsize; 
+	char *chars; 
+	char *render; 
+} erow; 
+
+/*** row operations ***/
+
+void editorAppendRow(char *s, size_t len) {
+	E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1)); 
+
+	int at = E.numrows; 
+	E.row[at].size = len; 
+	E.row[at].chars = malloc(len + 1); 
+	memcpy(E.row[at].chars, s, len); 
+	E.row[at].chars[len] = '\0'; 
+
+	E.row[at].rsize = 0; 
+	E.row[at].render = NULL; 
+
+	E.numrows++; 
+}
+```
+
+接下来, 创建 `editorUpdateRow()` 函数用于将 `erow.chars` 转换为 `erow.render`, 首先从简单的全部复制开始: 
+
+```c
+/*** row operations ***/
+
+void editorUpdateRow(erow *row) {
+	free(row->render); 
+	row->render = malloc(row->size + 1); 
+
+	int j; 
+	int idx = 0; 
+	for (j = 0; j < row->size; j++) {
+		row->render[idx++] = row->chars[j]; 
+	}
+	row->render[idx] = '\0'; 
+	row->rsize = idx; 
+}
+
+void editorAppendRow(char *s, size_t len) {
+	E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1)); 
+
+	int at = E.numrows; 
+	E.row[at].size = len; 
+	E.row[at].chars = malloc(len + 1); 
+	memcpy(E.row[at].chars, s, len); 
+	E.row[at].chars[len] = '\0'; 
+
+	E.row[at].rsize = 0; 
+	E.row[at].render = NULL; 
+	editorUpdateRow(&E.row[at]); 
+
+	E.numrows++; 
+}
+```
+
+接下来, 使用 `erow.render` 和 `erow.rsize` 替换原本在显示 `erow` 中使用的 `erow.chars` 和 `erow.size`: 
+
+```c
+/*** output ***/
+
+void editorDrawRows(struct abuf *ab) {
+	int y; 
+	for (y = 0; y < E.screenrows; y++) {
+		int filerow = y + E.rowoff; 
+		if (filerow >= E.numrows) {
+			if (E.numrows == 0 && y == E.screenrows / 3) {
+				char welcome[80]; 
+				int welcomelen = snprintf(welcome, sizeof(welcome), "Kilo editor -- version %s", KILO_VERSION); 
+				if (welcomelen > E.screencols) welcomelen = E.screencols; 
+				int padding = (E.screencols - welcomelen) / 2; 
+				if (padding) {
+					abAppend(ab, "~", 1); 
+					padding--; 
+				}
+				while (padding--) abAppend(ab, " ", 1); 
+				abAppend(ab, welcome, welcomelen); 
+			} else {
+				abAppend(ab, "~", 1);
+			}
+		} else {
+			int len = E.row[filerow].rsize - E.coloff; 
+			if (len < 0) len = 0; 
+			if (len > E.screencols) len = E.screencols; 
+			abAppend(ab, &E.row[filerow].render[E.coloff], len); 
+		}
+
+		
+		abAppend(ab, "\x1b[K", 3); 
+		if (y < E.screenrows - 1) {
+			abAppend(ab, "\r\n", 2);
+		}
+	}
+}
+```
+
+接下来修改代码使 `editorUpdateRow()` 函数支持 `Tab` 向多个空格 `Space` 的转换: 
+
+```c
+/*** row operations ***/
+
+void editorUpdateRow(erow *row) {
+	int tabs = 0; 
+	int j; 
+	for (j = 0; j < row->size; j++) {
+		if (row->chars[j] == '\t') tabs++; 
+	}
+
+	free(row->render); 
+	row->render = malloc(row->size + tabs * 7 + 1); 
+ 
+	int idx = 0; 
+	for (j = 0; j < row->size; j++) {
+		if (row->chars[j] == '\t') {
+			row->render[idx++] = ' '; 
+			while (idx % 8 != 0) row->render[idx++] = ' '; 
+		} else {
+			row->render[idx++] = row->chars[j]; 
+		}
+	}
+	row->render[idx] = '\0'; 
+	row->rsize = idx; 
+}
+```
+
+首先, 我们需要知道文本中一共存在的 `Tab` 个数以确定分配给 `erow.render` 的内存的大小. 每个 `Tab` 最多需要 `8` 个空格键 `Space`. 为了模拟 `Tab` 的效果, 当碰到 `Tab` 的时候, 填充空格直至移动至 `8` 的倍数列, 即 `Tab` 停止点. 
+
+我们可以将 `Tab` 步长设置为常量: 
+
+```c
+/*** defines ***/
+
+#define KILO_TAB_STOP 8
+
+/*** row operations ***/
+
+void editorUpdateRow(erow *row) {
+	int tabs = 0; 
+	int j; 
+	for (j = 0; j < row->size; j++) {
+		if (row->chars[j] == '\t') tabs++; 
+	}
+
+	free(row->render); 
+	row->render = malloc(row->size + tabs * (KILO_TAB_STOP - 1) + 1); 
+ 
+	int idx = 0; 
+	for (j = 0; j < row->size; j++) {
+		if (row->chars[j] == '\t') {
+			row->render[idx++] = ' '; 
+			while (idx % KILO_TAB_STOP != 0) row->render[idx++] = ' '; 
+		} else {
+			row->render[idx++] = row->chars[j]; 
+		}
+	}
+	row->render[idx] = '\0'; 
+	row->rsize = idx; 
+}
+```
+
