@@ -2512,3 +2512,48 @@ void editorMoveCursor(int key) {
 ```
 
 由于 `E.cy` 允许指向文件行数多 `1` 行的位置(为了后续插入新行), 在 `editorMoveCursor()` 函数的开头需要检查是否对应行是否存在有效的指针 `erow` . 
+
+### 移动光标至行尾
+
+在运行当前程序的时候, 光标依然可以移动至超出文本的范围, 通过将光标移动至长行的末尾, 然后按上方向键或下方向键至短行即可做到这一点. 由于 `E.cx` 坐标没有改变, 因此光标超出了文本的范围. 
+
+因此, 我们需要在发生此类情况的时候对 `E.cx` 进行修改: 
+
+```c
+/*** input ***/
+
+void editorMoveCursor(int key) {
+	erow *row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy]; 
+
+	switch (key) {
+		case ARROW_LEFT: 
+			if (E.cx != 0) {
+				E.cx--; 
+			}
+			break;
+		case ARROW_RIGHT: 
+			if (row && E.cx < row->size) {
+				E.cx++; 
+			}
+			break;
+		case ARROW_UP: 
+			if (E.cy != 0) {
+				E.cy--; 
+			}
+			break;
+		case ARROW_DOWN: 
+			if (E.cy < E.numrows) {
+				E.cy++; 
+			}
+			break;
+	}
+
+	row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy]; 
+	int rowlen = row ? row->size : 0; 
+	if (E.cx > rowlen) {
+		E.cx = rowlen; 
+	}
+}
+```
+
+我们认为 `NULL` 行的长度为 `0`. 
