@@ -3255,3 +3255,181 @@ void editorDrawStatusBar(struct abuf *ab) {
 
 当终端宽度不足的时候, 右侧的行号信息不会显示. 
 
+### 状态信息
+
+我们希望在状态条之下再添加一行, 用于向用户显示信息, 并在用户需要搜索的时候提示输入. 当前的信息将保存在全局状态的 `statusmsg` 字段中, 并创建一个时间戳字段以便在其显示一定时间之后自动消除. 
+
+```c
+/*** includes ***/
+
+#include <time.h>
+
+/*** defines ***/
+
+struct editorConfig {
+	int cx, cy; 
+	int rx; 
+	int rowoff; 
+	int coloff;
+	int screenrows; 
+	int screencols; 
+	int numrows; 
+	erow *row; 
+	char *filename; 
+	char statusmsg[80]; 
+	time_t statusmsg_time; 
+	struct termios orig_termios; 
+}; 
+
+/*** init ***/
+
+void initEditor(void) {
+	E.cx = 0; 
+	E.cy = 0; 
+	E.rx = 0; 
+	E.rowoff = 0; 
+	E.coloff = 0; 
+	E.numrows = 0; 
+	E.row = NULL; 
+	E.filename = NULL; 
+	E.statusmsg[0] = '\0'; 
+	E.statusmsg_time = 0; 
+
+	if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
+		die("getWindowSize"); 
+	}
+	E.screenrows -= 1; 
+}
+```
+
+`time_t` 来自 `<time.h>`. 
+
+接下来让我们定义 `editorSetStatusMessage()` 函数, 它接受格式化字符串和可变数量的参数, 类似 `printf()` 等函数. 
+
+```c
+/*** includes ***/
+
+#include <stdarg.h>
+
+/*** output ***/
+
+void editorSetStatusMessage(const char *fmt, ...) {
+	va_list ap; 
+	va_start(ap, fmt); 
+	vsnprintf(E.statusmsg, sizeof(E.statusmsg), fmt, ap); 
+	va_end(ap); 
+	E.statusmsg_time = time(NULL); 
+}
+
+/*** init ***/
+
+int main(int argc, char *argv[]) {
+	enableRawMode(); 
+	initEditor(); 
+	if (argc >= 2) {
+		editorOpen(argv[1]); 
+	}
+
+	editorSetStatusMessage("HELP: Ctrl-Q = quit"); 
+
+	while (1) {
+		editorRefreshScreen(); 
+		editorProcessKeypress(); 
+	}
+
+	return 0; 
+}
+```
+
+ - `va_list`: 来自 `<stdarg.h>`. 用于存储可变参数信息及遍历状态的数据类型. 
+ - `void va_start(valist ap, argN)`: 来自 `<stdarg.h>`. 初始化 `va_list` 变量, 使其指向可变参数列表的第一个参数. 其中 `ap` 为定义好的 `va_list` 类型变量, `argN` 为可变参数列表中最后一个固定参数的名称, 以此作为可变参数的起点. 
+ - `int vsnprintf(char *s, size_t n, const char *format, va_list ap)`: 来自 `<stdio.h>`. 通过格式化字符串和可变参数列表 `ap` 得到新的字符串. 
+ - `void va_end(va_list ap)`: 来自 `<stdarg.h>`. 清理并释放指针. 
+ - `time_t time(time_t *tloc)`: 来自 `<time.h>`. 返回当前的时间戳(Unix 纪元以来经过的秒数). 当 `tloc` 不为空指针的时候, 同步讲时间戳存入 `tloc` 指向的内存中. 
+
+接下来让我们在状态条下面为新行留出新的空间: 
+
+```c
+/*** output ***/
+
+void editorDrawStatusBar(struct abuf *ab) {
+	abAppend(ab, "\x1b[7m", 4); 
+	char status[80], rstatus[80];
+	int len = snprintf(status, sizeof(status), "%.20s - %d lines", E.filename ? E.filename : "[No Name]", E.numrows); 
+	int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy + 1, E.numrows); 
+	if (len > E.screencols) len = E.screencols; 
+	abAppend(ab, status, len); 
+	while (len < E.screencols) {
+		if (E.screencols - len == rlen) {
+			abAppend(ab, rstatus, rlen); 
+			break; 
+		} else {
+			abAppend(ab, " ", 1); 
+			len++; 
+		}
+	}
+	abAppend(ab, "\x1b[m", 3); 
+	abAppend(ab, "\r\n", 2); 
+}
+
+/*** init ***/
+
+void initEditor(void) {
+	E.cx = 0; 
+	E.cy = 0; 
+	E.rx = 0; 
+	E.rowoff = 0; 
+	E.coloff = 0; 
+	E.numrows = 0; 
+	E.row = NULL; 
+	E.filename = NULL; 
+	E.statusmsg[0] = '\0'; 
+	E.statusmsg_time = 0; 
+
+	if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
+		die("getWindowSize"); 
+	}
+	E.screenrows -= 2; 
+}
+```
+
+创建 `editorDrawMessageBar()` 函数以绘制状态信息条: 
+
+```c
+/*** output ***/
+
+void editorDrawMessageBar(struct abuf *ab) {
+	abAppend(ab, "\x1b[K", 3); 
+	int msglen = strlen(E.statusmsg); 
+	if (msglen > E.screencols) msglen = E.screencols; 
+	if (msglen && time(NULL) - E.statusmsg_time < 5) {
+		abAppend(ab, E.statusmsg, msglen); 
+	}
+}
+
+void editorRefreshScreen(void) {
+	editorScroll();
+
+	struct abuf ab = ABUF_INIT; 
+
+	abAppend(&ab, "\x1b[?25l", 6); 
+	abAppend(&ab, "\x1b[H", 3); 
+
+	editorDrawRows(&ab);
+	editorDrawStatusBar(&ab); 
+	editorDrawMessageBar(&ab); 
+
+	char buf[32]; 
+	snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.rx - E.coloff) + 1); 
+	abAppend(&ab, buf, strlen(buf)); 
+
+	abAppend(&ab, "\x1b[?25h", 6); 
+	write(STDOUT_FILENO, ab.b, ab.len);
+	abFree(&ab);
+}
+```
+
+首先使用 `K` 转义序列清除信息条, 然后在屏幕宽度限制下显示信息, 超出 `5` 秒的信息将被不显示. 另外, 只有在按任意按键之后屏幕才会刷新. 
+
+## 文本编辑器
+
