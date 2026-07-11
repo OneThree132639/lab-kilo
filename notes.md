@@ -3433,3 +3433,94 @@ void editorRefreshScreen(void) {
 
 ## 文本编辑器
 
+### 插入普通字符
+
+从实现一个可以在给定行 `erow` 的给定位置插入 `1` 个字符的函数开始: 
+
+```c
+/*** row operations ***/
+
+void editorRowInsertChar(erow *row, int at, char c) {
+	if (at < 0 || at > row->size) at = row->size; 
+	row->chars = realloc(row->chars, row->size + 2); 
+	memmove(&row->chars[at + 1], &row->chars[at], row->size - at + 1); 
+	row->size++; 
+	row->chars[at] = c; 
+	editorUpdateRow(row); 
+}
+```
+
+ - `void *memmove(void *s1, const void *s2, size_t n)`: 来自 `<string.h>`. 将指针 `s2` 指向的 `n` 个字节的内存块复制到指针 `s1` 指向的内存块中. `s1` 和 `s2` 指向的部分可以重叠, 可以理解为首先将 `s2` 指向的内存块复制到临时内存中, 再复制到 `s1` 指向的块中. 
+
+在 `editorRowInsertChar()` 函数中, 首先对 `at` 进行边界检查, 超出边界的的 `at` 将被重定向至行末. 接下来为字符串重新分配空间, 注意 `erow.size` 指的是字符串不包括终止 `\0` 字符的长度, 因此分配新的空间时长度为 `erow.size + 2`. 在将位于 `at` 及之后的字符后移一位之后, 将新的字符放入索引为 `at` 的位置, 最后调用 `editUpdateRow()` 函数更新 `render` 字符串. 
+
+接下来我们创建一个新的区域 `/*** editor operations ***/` 用于存放我们将在 `editorProcessKeypress()` 函数中调用的函数, 这些函数将实现在按下各种按键的时候的行为. 首先, 创建一个函数 `editorInsertChar()`, 用于调用 `editorRowInsertChar()` 并在当前光标指向的位置插入一个字符: 
+
+```c
+/*** editor operations ***/
+
+void editorInsertChar(int c) {
+	if (E.cy == E.numrows) {
+		editorAppendRow("", 0); 
+	}
+	editorRowInsertChar(&E.row[E.cy], E.cx, c); 
+	E.cx++; 
+}
+```
+
+如果当前位于最后不被包括的一行(有 `~` 的一行), 则添加一个新行. 在此之后, 将新字符添加进当前光标所在位置, 并同步将光标后移一位以保证光标位于新插入的字符之后. 
+
+让我们令调用 `editorInsertChar()` 函数作为 `editorProcessKeypress()` 函数中 `switch` 语句的 `default` 分支, 因此不被认为是用于其它操作的字符将被插入文本中: 
+
+```c
+/*** input ***/
+
+void editorProcessKeypress(void) {
+	int c = editorReadKey(); 
+
+	switch (c) {
+		case CTRL_KEY('q'): 
+			write(STDOUT_FILENO, "\x1b[2J", 4); 
+			write(STDOUT_FILENO, "\x1b[H", 3); 
+			exit(0); 
+			break; 
+			
+		case HOME_KEY: 
+			E.cx = 0;
+			break;
+
+		case END_KEY: 
+			if (E.cy < E.numrows) {
+				E.cx = E.row[E.cy].size; 
+			}
+			break; 
+
+		case PAGE_UP: 
+		case PAGE_DOWN: {
+			if (c == PAGE_UP) {
+				E.cy = E.rowoff; 
+			} else if (c == PAGE_DOWN) {
+				E.cy = E.rowoff + E.screenrows - 1; 
+				if (E.cy > E.numrows) E.cy = E.numrows; 
+			}
+			int times = E.screenrows; 
+			while (times--) {
+				editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN); 
+			}
+			break;
+		}
+
+		case ARROW_UP:
+		case ARROW_DOWN: 
+		case ARROW_LEFT: 
+		case ARROW_RIGHT: 
+			editorMoveCursor(c); 
+			break; 
+
+		default: 
+			editorInsertChar(c); 
+			break; 
+	}
+}
+```
+
