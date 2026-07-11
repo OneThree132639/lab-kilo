@@ -3617,3 +3617,223 @@ void editorProcessKeypress(void) {
 
 最后, 我们将 `Ctrl-L` 和 `Escape` 设置为不进行任何操作. 一般在终端应用中, `Ctrl-L` 被用于刷新屏幕, 但是我们的文本编辑器在每次按键的时候都会刷新一次, 因此我们不需要这个功能. 由于存在大量未处理的转义序列(比如 `F1` - `F12` 键), 并且, 根据我们的 `editorReadKey()` 的写法, 按下这些键返回的是 `\x1b`, 因此, 为了避免无意识的 `\x1b` 插入, 我们忽略这些按键. 
 
+### 保存至磁盘
+
+接下来让我们实现将文件保存至磁盘的功能. 首先写一个将我们的 `erows` 数组转换为一整个字符串的函数, 这样就可以直接文本写入文件中: 
+
+```c
+/*** file i/o ***/
+
+char *editorRowsToString(int *buflen) {
+	int totlen = 0; 
+	int j; 
+	for (j = 0; j < E.numrows; j++) {
+		totlen += E.row[j].size + 1; 
+	}
+	*buflen = totlen; 
+
+	char *buf = malloc(totlen); 
+	char *p = buf; 
+	for (j = 0; j < E.numrows; j++) {
+		memcpy(p, E.row[j].chars, E.row[j].size); 
+		p += E.row[j].size; 
+		*p = '\n'; 
+		p++; 
+	}
+
+	return buf; 
+}
+```
+
+首先计算所有行字符串的长度(包括行尾的 `\n`), 将其保存至 `buflen` 中, 接着分配内存、复制文本内容、添加换行符并返回字符串指针. 
+
+接下来实现 `editorSave()` 函数, 将字符串写入磁盘中: 
+
+```c
+/*** include ***/
+
+#include <fcntl.h>
+
+/*** file i/o ***/
+
+void editorSave() {
+	if (E.filename == NULL) return; 
+
+	int len; 
+	char *buf = editorRowsToString(&len); 
+
+	int fd = open(E.filename, O_RDWR | O_CREAT, 0644); 
+	ftruncate(fd, len); 
+	write(fd, buf, len); 
+	close(fd); 
+	free(buf); 
+}
+```
+
+ - `int open(const char *path, int oflag, ...)`: 来自 `<fcntl.h>`. 打开一个文件 `path` 并将其关联至一个打开文件描述符, 并返回该打开文件描述符(如果发生错误则返回 `-1`). `oflag` 用于设置文件的状态和使用模式, 是一种位标识. 
+ - `O_RDWR`: 来自 `<fcntl.h>`. 表明同时以读写方式打开文件, 打开 `FIFO`(命名管道)文件会导致未定义行为. 
+ - `O_CREAT`: 来自 `<fcntl.h>`. 当文件已经存在的时候, 除非设置 `O_EXCL`, 此时 `open()` 函数失败, 否则该标志无效. 当文件不存在的时候, 创建文件, 同时其访问准许比特被设置为 `open()` 函数的第三个参数, 类型为 `mode_t`, 控制用户访问的权限. 设置为 `0644` 是标准的文本访问权限, 允许当前用户读写文件的同时只允许其它用户读文件. 
+ - `int ftruncate(int fildes, off_t length)`: 来自 `<unistd.h>`. 将文件截断至 `length` 长度, 过长则丢弃文件末尾的数据, 果断则使用 `0` 字节填充. 
+ - `int close(int fildes)`: 来自 `<unistd.h>`. 关闭文件, 释放文件描述符. `0` 标识成功, `-1` 表示失败. 
+
+如果是新文件, `E.filename` 为 `NULL`, 但是我们不知道文件应当存储的地方, 因此我们暂时简单返回, 在之后我们会添加提示用户输入文件名的功能. 
+
+一般的覆写文件的方法是在 `open()` 函数中使用位标识 `O_TRUNC` 将文件完全截断, 将其变为空文件之后再写入新数据. 而我们采用将文件截断至目标长度之后再写入文件, 这样的好处是如果截断操作成功而写入操作失败, 我们可以保留最大限度的数据而不是丢失所有的数据. 
+
+更加先进的编辑器采用的方法是将数据写入一个新的临时文件, 然后重命名该文件为想要覆写的文件的名称. 同时在这一过程中严格检查可能出现的错误. 
+
+接下来, 让我们绑定快捷键至 `editorSave()` 函数, 我们使用快捷键 `Ctrl-S`. 
+
+```c
+/*** input ***/
+
+void editorProcessKeypress(void) {
+	int c = editorReadKey(); 
+
+	switch (c) {
+		case '\r': 
+			/* TODO */
+			break; 
+
+		case CTRL_KEY('q'): 
+			write(STDOUT_FILENO, "\x1b[2J", 4); 
+			write(STDOUT_FILENO, "\x1b[H", 3); 
+			exit(0); 
+			break; 
+
+		case CTRL_KEY('s'): 
+			editorSave(); 
+			break; 
+
+		case HOME_KEY: 
+			E.cx = 0;
+			break;
+
+		case END_KEY: 
+			if (E.cy < E.numrows) {
+				E.cx = E.row[E.cy].size; 
+			}
+			break; 
+
+		case BACKSPACE: 
+		case CTRL_KEY('h'): 
+		case DEL_KEY: 
+			/* TODO */
+			break; 
+
+		case PAGE_UP: 
+		case PAGE_DOWN: {
+			if (c == PAGE_UP) {
+				E.cy = E.rowoff; 
+			} else if (c == PAGE_DOWN) {
+				E.cy = E.rowoff + E.screenrows - 1; 
+				if (E.cy > E.numrows) E.cy = E.numrows; 
+			}
+			int times = E.screenrows; 
+			while (times--) {
+				editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN); 
+			}
+			break;
+		}
+
+		case ARROW_UP:
+		case ARROW_DOWN: 
+		case ARROW_LEFT: 
+		case ARROW_RIGHT: 
+			editorMoveCursor(c); 
+			break; 
+
+		case CTRL_KEY('l'): 
+		case '\x1b': 
+			break; 
+
+		default: 
+			editorInsertChar(c); 
+			break; 
+	}
+}
+```
+
+现在使用程序打开一个文件, 往里面添加一些字符, 按下 `Ctrl-S`, 重新打开文件, 应该可以看到对文件的修改已经成功保存. 
+
+让我们为 `editorSave()` 函数添加错误处理: 
+
+```c
+/*** file i/o ***/
+
+void editorSave(void) {
+	if (E.filename == NULL) return; 
+
+	int len; 
+	char *buf = editorRowsToString(&len); 
+
+	int fd = open(E.filename, O_RDWR | O_CREAT, 0644); 
+	if (fd != -1) {
+		if (ftruncate(fd, len) != -1) {
+			if (write(fd, buf, len) == len) {
+				close(fd); 
+				free(buf); 
+				return; 
+			}
+		}
+		close(fd); 
+	}
+	
+	free(buf); 
+}
+```
+
+无论错误是否发生, 都需要保证文件已经关闭并且 `buf` 指向的内存空间已被释放. 
+
+接下来使用 `editorSetStatusMessage()` 提示用户保存操作是否成功. 另外, 在 `main()` 函数调用它的时候添加 `Ctrl-S` 组合键的帮助信息: 
+
+```c
+/*** file i/o ***/
+
+void editorSave(void) {
+	if (E.filename == NULL) return; 
+
+	int len; 
+	char *buf = editorRowsToString(&len); 
+
+	int fd = open(E.filename, O_RDWR | O_CREAT, 0644); 
+	if (fd != -1) {
+		if (ftruncate(fd, len) != -1) {
+			if (write(fd, buf, len) == len) {
+				close(fd); 
+				free(buf); 
+				editorSetStatusMessage("%d bytes written to disk", len); 
+				return; 
+			}
+		}
+		close(fd); 
+	}
+
+	free(buf); 
+	editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno)); 
+}
+
+/*** init ***/
+
+int main(int argc, char *argv[]) {
+	enableRawMode(); 
+	initEditor(); 
+	if (argc >= 2) {
+		editorOpen(argv[1]); 
+	}
+
+	editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit"); 
+
+	while (1) {
+		editorRefreshScreen(); 
+		editorProcessKeypress(); 
+	}
+
+	return 0; 
+}
+```
+
+ - `char *strerror(int errnum)`: 来自 `<string.h>`. 返回 `errnum` 值对应的错误信息. 
+
+上述程序不能直接编译, 因为我们在定义 `editorSetStatusMessage()` 之前使用了它. 我们需要提前声明它的函数原型, 包括参数和返回值. 这一部分放在新创建的 `/*** prototypes ***/` 区域中. 
+
