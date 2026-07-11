@@ -3524,3 +3524,96 @@ void editorProcessKeypress(void) {
 }
 ```
 
+### 防止插入特殊字符
+
+当前程序中, 如果按 `Backspace`, `Enter` 等键, 它们对应的字符会直接插入文本中, 这与我们实现文本编辑器的期望不符. 接下来让我们实现这些键的功能以防止它们落入 `default` 分支: 
+
+```c
+/*** defines ***/
+
+enum editorKey {
+	BACKSPACE = 127, 
+	ARROW_LEFT = 1000, 
+	ARROW_RIGHT, 
+	ARROW_UP, 
+	ARROW_DOWN, 
+	DEL_KEY, 
+	HOME_KEY, 
+	END_KEY, 
+	PAGE_UP, 
+	PAGE_DOWN
+};
+
+/*** input ***/
+
+void editorProcessKeypress(void) {
+	int c = editorReadKey(); 
+
+	switch (c) {
+		case '\r': 
+			/* TODO */
+			break; 
+
+		case CTRL_KEY('q'): 
+			write(STDOUT_FILENO, "\x1b[2J", 4); 
+			write(STDOUT_FILENO, "\x1b[H", 3); 
+			exit(0); 
+			break; 
+
+		case HOME_KEY: 
+			E.cx = 0;
+			break;
+
+		case END_KEY: 
+			if (E.cy < E.numrows) {
+				E.cx = E.row[E.cy].size; 
+			}
+			break; 
+
+		case BACKSPACE: 
+		case CTRL_KEY('h'): 
+		case DEL_KEY: 
+			/* TODO */
+			break; 
+
+		case PAGE_UP: 
+		case PAGE_DOWN: {
+			if (c == PAGE_UP) {
+				E.cy = E.rowoff; 
+			} else if (c == PAGE_DOWN) {
+				E.cy = E.rowoff + E.screenrows - 1; 
+				if (E.cy > E.numrows) E.cy = E.numrows; 
+			}
+			int times = E.screenrows; 
+			while (times--) {
+				editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN); 
+			}
+			break;
+		}
+
+		case ARROW_UP:
+		case ARROW_DOWN: 
+		case ARROW_LEFT: 
+		case ARROW_RIGHT: 
+			editorMoveCursor(c); 
+			break; 
+
+		case CTRL_KEY('l'): 
+		case '\x1b': 
+			break; 
+
+		default: 
+			editorInsertChar(c); 
+			break; 
+	}
+}
+```
+
+由于 `Backspace` 在 `C` 中没有一个可读的反斜杠转义表示(如 `\n`, `\r` 等), 因此我们将其加入 `editorKey` 枚举类中并将其赋值为它的 `ASCII` 码值 `127`. 
+
+在 `editorProcessKeypress()` 函数中, 我们添加至 `switch` 语句中的第 `1` 个分支是 `\r`, 即 `Enter` 键. 当前我们暂且忽略它, 在之后再实现其功能, 于是我们留下了一个 `/* TODO */` 注释. 
+
+对 `Backspace` 和 `Delete` 采取类似的操作. `Ctrl-H` 组合发送控制码 `8`, 这也是过去 `Backspace` 键会发送的字符. 如果你观察 `ASCII` 表, 你会发现号码 `8` 被命名为 `BS`, 意为 `backspace`, 而 `127` 被命名为 `DEL`, 意为 `delete`. 然而, 由于某些原因, 现代计算机中 `Backspace` 键对应的码值被设置为 `127`, 而 `Delete` 键则为 `\x1b[3~`. 
+
+最后, 我们将 `Ctrl-L` 和 `Escape` 设置为不进行任何操作. 一般在终端应用中, `Ctrl-L` 被用于刷新屏幕, 但是我们的文本编辑器在每次按键的时候都会刷新一次, 因此我们不需要这个功能. 由于存在大量未处理的转义序列(比如 `F1` - `F12` 键), 并且, 根据我们的 `editorReadKey()` 的写法, 按下这些键返回的是 `\x1b`, 因此, 为了避免无意识的 `\x1b` 插入, 我们忽略这些按键. 
+
