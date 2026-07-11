@@ -3837,3 +3837,170 @@ int main(int argc, char *argv[]) {
 
 上述程序不能直接编译, 因为我们在定义 `editorSetStatusMessage()` 之前使用了它. 我们需要提前声明它的函数原型, 包括参数和返回值. 这一部分放在新创建的 `/*** prototypes ***/` 区域中. 
 
+### 脏标记
+
+我们希望记录保存在文件中的内容与加载进编辑器中的内容是否存在不同, 这样可以在用户未保存文本并退出的时候提醒他们以避免更改丢失. 
+
+如果文本在被编辑器打开之后修改过, 我们就称该文本变“脏”了. 我们在全局状态中添加 `dirty` 字段以指示文本是否变“脏”. 
+
+```c
+/*** data ***/
+
+struct editorConfig {
+	int cx, cy; 
+	int rx; 
+	int rowoff; 
+	int coloff;
+	int screenrows; 
+	int screencols; 
+	int numrows; 
+	erow *row; 
+	int dirty; 
+	char *filename; 
+	char statusmsg[80]; 
+	time_t statusmsg_time; 
+	struct termios orig_termios; 
+}; 
+
+/*** init ***/
+
+void initEditor(void) {
+	E.cx = 0; 
+	E.cy = 0; 
+	E.rx = 0; 
+	E.rowoff = 0; 
+	E.coloff = 0; 
+	E.numrows = 0; 
+	E.row = NULL; 
+	E.dirty = 0; 
+	E.filename = NULL; 
+	E.statusmsg[0] = '\0'; 
+	E.statusmsg_time = 0; 
+
+	if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
+		die("getWindowSize"); 
+	}
+	E.screenrows -= 2; 
+}
+```
+
+接下来, 在状态条中显示 `E.dirty` 字段的状态. 如果文本变“脏”, 在状态条中显示 `(modified)`. 
+
+```c
+/*** output ***/
+
+void editorDrawStatusBar(struct abuf *ab) {
+	abAppend(ab, "\x1b[7m", 4); 
+	char status[80], rstatus[80];
+	int len = snprintf(
+		status, sizeof(status), "%.20s - %d lines %s", 
+		E.filename ? E.filename : "[No Name]", E.numrows, 
+		E.dirty ? "(modified)" : ""
+	); 
+	int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy + 1, E.numrows); 
+	if (len > E.screencols) len = E.screencols; 
+	abAppend(ab, status, len); 
+	while (len < E.screencols) {
+		if (E.screencols - len == rlen) {
+			abAppend(ab, rstatus, rlen); 
+			break; 
+		} else {
+			abAppend(ab, " ", 1); 
+			len++; 
+		}
+	}
+	abAppend(ab, "\x1b[m", 3); 
+	abAppend(ab, "\r\n", 2); 
+}
+```
+
+接下来, 令每次行操作都使 `E.dirty` 增加 `1`: 
+
+```c
+/*** row operations ***/
+
+void editorAppendRow(char *s, size_t len) {
+	E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1)); 
+
+	int at = E.numrows; 
+	E.row[at].size = len; 
+	E.row[at].chars = malloc(len + 1); 
+	memcpy(E.row[at].chars, s, len); 
+	E.row[at].chars[len] = '\0'; 
+
+	E.row[at].rsize = 0; 
+	E.row[at].render = NULL; 
+	editorUpdateRow(&E.row[at]); 
+
+	E.numrows++; 
+	E.dirty++; 
+}
+
+void editorRowInsertChar(erow *row, int at, char c) {
+	if (at < 0 || at > row->size) at = row->size; 
+	row->chars = realloc(row->chars, row->size + 2); 
+	memmove(&row->chars[at + 1], &row->chars[at], row->size - at + 1); 
+	row->size++; 
+	row->chars[at] = c; 
+	editorUpdateRow(row); 
+	E.dirty++; 
+}
+```
+
+当然也可以使用 `E.dirty = 1;` 代替 `E.dirty++;`, 但是通过 `E.dirty` 的自增, 我们可以直观地了解到这个文件有“多脏”. 当然, 在本教程中, `E.dirty` 只是想当于一个布尔变量. 我们不会使用到 `E.dirty` 的具体的值. 
+
+如果你现在通过程序打开文件, 你会发现 `(modified)` 已经出现在状态条中了, 这是因为在 `editorOpen()` 函数中调用了 `editorAppendRow()` 函数, 导致 `E.dirty` 自增. 为了修复这个问题, 在 `editorOpen()` 函数的最后将 `E.dirty` 设置为 `0`. 
+
+另外, 由于保存之后编辑器的内容与文件中的内容一致, 因此在成功保存的时候也应当将 `E.dirty` 设置为 `0`: 
+
+```c
+/*** file i/o ***/
+
+void editorOpen(char *filename) {
+	free(E.filename); 
+	E.filename = strdup(filename); 
+
+	FILE *fp = fopen(filename, "r"); 
+	if (!fp) die("fopen"); 
+
+	char *line = NULL; 
+	size_t linecap = 0; 
+	ssize_t linelen; 
+	while ((linelen = getline(&line, &linecap, fp)) != -1) {
+		while (linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r')) {
+			linelen--; 
+		}
+		editorAppendRow(line, linelen); 
+	}
+
+	free(line); 
+	fclose(fp); 
+	E.dirty = 0; 
+}
+
+void editorSave(void) {
+	if (E.filename == NULL) return; 
+
+	int len; 
+	char *buf = editorRowsToString(&len); 
+
+	int fd = open(E.filename, O_RDWR | O_CREAT, 0644); 
+	if (fd != -1) {
+		if (ftruncate(fd, len) != -1) {
+			if (write(fd, buf, len) == len) {
+				close(fd); 
+				free(buf); 
+				E.dirty = 0; 
+				editorSetStatusMessage("%d bytes written to disk", len); 
+				return; 
+			}
+		}
+		close(fd); 
+	}
+
+	free(buf); 
+	editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno)); 
+}
+```
+
+现在, 你可以看到随着字符的插入, `(modified)` 在状态条中出现, 以及随着文件的成功保存, `(modified)` 在状态条中的消失. 
