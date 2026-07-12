@@ -4293,3 +4293,182 @@ void editorDelChar(void) {
 (此处发现 `Delete` 键功能存在问题, 在 MacOS Terminal 和 iTerm 上使用 `fn+Backspace` 组合键会在光标处输入 `~`)
 (在 MacOS iTerm 上发现 `fn+up`, `fn+down` 存在相同输入 `~` 的问题, 在 Terminal 中 `fn+up`, `fn+down`, `fn+left`, `fn+right` 依旧控制终端页面滚动, 未被程序捕获)
 
+### `Enter` 键
+
+最后一个需要实现的操作是 `Enter` 键. 它允许用户在文本中插入新行, 或者将当前行拆分为 `2` 行. 首先, 我们需要将 `editorAppendRow(...)` 函数修改为 `editorInsertRow(int at, ...)`, 这样, 它就可以在任意索引 `at` 处插入一个新行: 
+
+```c
+/*** row operations ***/
+
+void editorInsertRow(int at, char *s, size_t len) {
+	if (at < 0 || at > E.numrows) return; 
+
+	E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1)); 
+	memmove(&E.row[at + 1], &E.row[at], sizeof(erow) * (E.numrows - at)); 
+
+	E.row[at].size = len; 
+	E.row[at].chars = malloc(len + 1); 
+	memcpy(E.row[at].chars, s, len); 
+	E.row[at].chars[len] = '\0'; 
+
+	E.row[at].rsize = 0; 
+	E.row[at].render = NULL; 
+	editorUpdateRow(&E.row[at]); 
+
+	E.numrows++; 
+	E.dirty++; 
+}
+```
+
+与 `editorRowInsertChar()` 函数类似, 首先检查 `at` 索引, 然后为新行分配内存, 并将新行之后的所有行后移一位. 现在 `at` 作为参数传入, 因此原来的 `int at = ...` 语句已经被删除. 
+
+接下来我们需要将所有对 `editorAppendRow(...)` 函数的调用修改为 `editorInsertRow(E.numrows, ...)` 函数: 
+
+```c
+/*** editor operations ***/
+
+void editorInsertChar(int c) {
+	if (E.cy == E.numrows) {
+		editorInsertRow(E.numrows, "", 0); 
+	}
+	editorRowInsertChar(&E.row[E.cy], E.cx, c); 
+	E.cx++; 
+}
+
+/*** file i/o ***/
+
+void editorOpen(char *filename) {
+	free(E.filename); 
+	E.filename = strdup(filename); 
+
+	FILE *fp = fopen(filename, "r"); 
+	if (!fp) die("fopen"); 
+
+	char *line = NULL; 
+	size_t linecap = 0; 
+	ssize_t linelen; 
+	while ((linelen = getline(&line, &linecap, fp)) != -1) {
+		while (linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r')) {
+			linelen--; 
+		}
+		editorInsertRow(E.numrows, line, linelen); 
+	}
+
+	free(line); 
+	fclose(fp); 
+	E.dirty = 0; 
+}
+```
+
+现在我们有了 `editorInsertRow()` 函数, 可以开始实现 `editorInsertNewline()` 函数来处理 `Enter` 键: 
+
+```c
+/*** editor operations ***/
+
+void editorInsertNewline(void) {
+	if (E.cx == 0) {
+		editorInsertRow(E.cy, "", 0); 
+	} else {
+		erow *row = &E.row[E.cy]; 
+		editorInsertRow(E.cy + 1, &row->chars[E.cx], row->size - E.cx); 
+		row = &E.row[E.cy]; 
+		row->size = E.cx; 
+		row->chars[row->size] = '\0'; 
+		editorUpdateRow(row); 
+	}
+	E.cy++; 
+	E.cx = 0; 
+}
+```
+
+如果光标在行首, 那么我们就在当前行之前插入一个空行. 否则, 首先调用 `editorInsertRow()` 函数, 在当前行之后插入一个新行, 并且复制当前行位于光标之后的所有字符, 接着重新赋值 `row` 指针以防止旧指针被 `editorInsertRow()` 中的 `realloc()` 释放造成的悬挂指针问题. 接着讲当前行的文本截断至光标处, 最后调用 `editorUpdateRow()` 函数更新 `render`. 
+
+在函数的最后, 将光标移动到新行的行首. 
+
+最后, 将 `Enter` 键绑定到 `editorInsertNerline()` 函数上: 
+
+```c
+/*** input ***/
+
+void editorProcessKeypress(void) {
+	static int quit_times = KILO_QUIT_TIMES; 
+
+	int c = editorReadKey(); 
+
+	switch (c) {
+		case '\r': 
+			editorInsertNewline(); 
+			break; 
+
+		case CTRL_KEY('q'): 
+			if (E.dirty && quit_times > 0) {
+				editorSetStatusMessage(
+					"WARNING!!! File has unsaved changes. " 
+					"Press Ctrl-Q %d more times to quit. ", quit_times
+				); 
+				quit_times--; 
+				return; 
+			}
+			write(STDOUT_FILENO, "\x1b[2J", 4); 
+			write(STDOUT_FILENO, "\x1b[H", 3); 
+			exit(0); 
+			break; 
+
+		case CTRL_KEY('s'): 
+			editorSave(); 
+			break; 
+
+		case HOME_KEY: 
+			E.cx = 0;
+			break;
+
+		case END_KEY: 
+			if (E.cy < E.numrows) {
+				E.cx = E.row[E.cy].size; 
+			}
+			break; 
+
+		case BACKSPACE: 
+		case CTRL_KEY('h'): 
+		case DEL_KEY: 
+			if (c == DEL_KEY) editorMoveCursor(ARROW_RIGHT); 
+			editorDelChar(); 
+			break; 
+
+		case PAGE_UP: 
+		case PAGE_DOWN: {
+			if (c == PAGE_UP) {
+				E.cy = E.rowoff; 
+			} else if (c == PAGE_DOWN) {
+				E.cy = E.rowoff + E.screenrows - 1; 
+				if (E.cy > E.numrows) E.cy = E.numrows; 
+			}
+			int times = E.screenrows; 
+			while (times--) {
+				editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN); 
+			}
+			break;
+		}
+
+		case ARROW_UP:
+		case ARROW_DOWN: 
+		case ARROW_LEFT: 
+		case ARROW_RIGHT: 
+			editorMoveCursor(c); 
+			break; 
+
+		case CTRL_KEY('l'): 
+		case '\x1b': 
+			break; 
+
+		default: 
+			editorInsertChar(c); 
+			break; 
+	}
+
+	quit_times = KILO_QUIT_TIMES; 
+}
+```
+
+现在, 我们完成了所有文本编辑操作. 你可以尝试在接下来的过程中使用现在的程序修改程序的源代码. 建议使用 `git` 等工具来保存你的修改, 以便在碰到错误时回滚. 
+
