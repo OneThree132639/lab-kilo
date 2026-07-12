@@ -4097,3 +4097,125 @@ void editorProcessKeypress(void) {
 
 在 `editorProcessKeypress()` 函数中, 我们创建了一个静态变量 `quit_times`, 这个变量不会随着函数的退出而销毁. 它记录了当前用户连续按 `Ctrl-Q` 的次数. 每次按 `Ctrl-Q` 都使下方显示警告状态信息并减少 `quit_times` 的值. 当 `quit_times` 的值减少至 `0` 时, 我们才允许退出编辑器. 如果在按下 `Ctrl-Q` 之后按了其它按键, `quit_times` 的值会被重置. 
 
+### 简单退格
+
+接下来让我们实现退格 `Backspace`. 首先让我们实现 `editorRowDelChar()` 函数, 用于在 `erow` 中删除 `1` 个字符: 
+
+```c
+/*** row operations ***/
+
+void editorRowDelChar(erow *row, int at) {
+	if (at < 0 || at >= row->size) return; 
+	memmove(&row->chars[at], &row->chars[at + 1], row->size - at); 
+	row->size--; 
+	editorUpdateRow(row); 
+	E.dirty++; 
+}
+```
+
+它与 `editorRowInsertChar()` 函数非常相似, 唯一的区别是我们在此处不进行内存管理, 而只是简单地将被删除字符之后的字符前移 `1` 位(包括末尾的 `\0`). 接着减少 `erow.size`, 使用 `editorUpdateRow()` 更新 `erow.render`, 并将 `E.dirty` 自增. 
+
+接下来, 让我们实现 `editorDelChar()`, 它将调用 `editorRowDelChar()` 删除光标左侧的字符: 
+
+```c
+/*** editor operations ***/
+
+void editorDelChar(void) {
+	if (E.cy == E.numrows) return; 
+
+	erow *row = &E.row[E.cy]; 
+	if (E.cx > 0) {
+		editorRowDelChar(row, E.cx - 1); 
+		E.cx--; 
+	}
+}
+```
+
+当光标位于文件之外的行时(`E.cy == E.numrows`)时, 没有可以被删除的东西, 因此直接返回. 否则, 如果光标不位于行首, 那么我们就删除光标左侧的字符并将光标左移 `1` 位. 
+
+让我们将 `Backspace`, `Ctrl-H` 和 `Del` 键绑定到 `editorDelChar()` 函数上: 
+
+```c
+/*** input ***/
+
+void editorProcessKeypress(void) {
+	static int quit_times = KILO_QUIT_TIMES; 
+
+	int c = editorReadKey(); 
+
+	switch (c) {
+		case '\r': 
+			/* TODO */
+			break; 
+
+		case CTRL_KEY('q'): 
+			if (E.dirty && quit_times > 0) {
+				editorSetStatusMessage(
+					"WARNING!!! File has unsaved changes. " 
+					"Press Ctrl-Q %d more times to quit. ", quit_times
+				); 
+				quit_times--; 
+				return; 
+			}
+			write(STDOUT_FILENO, "\x1b[2J", 4); 
+			write(STDOUT_FILENO, "\x1b[H", 3); 
+			exit(0); 
+			break; 
+
+		case CTRL_KEY('s'): 
+			editorSave(); 
+			break; 
+
+		case HOME_KEY: 
+			E.cx = 0;
+			break;
+
+		case END_KEY: 
+			if (E.cy < E.numrows) {
+				E.cx = E.row[E.cy].size; 
+			}
+			break; 
+
+		case BACKSPACE: 
+		case CTRL_KEY('h'): 
+		case DEL_KEY: 
+			if (c == DEL_KEY) editorMoveCursor(ARROW_RIGHT); 
+			editorDelChar(); 
+			break; 
+
+		case PAGE_UP: 
+		case PAGE_DOWN: {
+			if (c == PAGE_UP) {
+				E.cy = E.rowoff; 
+			} else if (c == PAGE_DOWN) {
+				E.cy = E.rowoff + E.screenrows - 1; 
+				if (E.cy > E.numrows) E.cy = E.numrows; 
+			}
+			int times = E.screenrows; 
+			while (times--) {
+				editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN); 
+			}
+			break;
+		}
+
+		case ARROW_UP:
+		case ARROW_DOWN: 
+		case ARROW_LEFT: 
+		case ARROW_RIGHT: 
+			editorMoveCursor(c); 
+			break; 
+
+		case CTRL_KEY('l'): 
+		case '\x1b': 
+			break; 
+
+		default: 
+			editorInsertChar(c); 
+			break; 
+	}
+
+	quit_times = KILO_QUIT_TIMES; 
+}
+```
+
+注意到 `Delete` 的效果(删除光标右侧的字符)与将光标右移之后再使用 `Backspace` 相同. 这也是我们实现 `Delete` 的功能的方式. 
