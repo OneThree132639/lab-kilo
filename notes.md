@@ -4004,3 +4004,96 @@ void editorSave(void) {
 ```
 
 现在, 你可以看到随着字符的插入, `(modified)` 在状态条中出现, 以及随着文件的成功保存, `(modified)` 在状态条中的消失. 
+
+### 退出确认
+
+现在我们可以在用户准备退出编辑器时提醒用户未保存更改. 如果 `E.dirty` 不为 `0`, 那么我们将在状态条中显示警告, 并要求用户连续按 `Ctrl-Q` 三次以上以退出的时候不保存更改. 
+
+```c
+/*** defines ***/
+
+#define KILO_QUIT_TIMES 3
+
+/*** input ***/
+
+void editorProcessKeypress(void) {
+	static int quit_times = KILO_QUIT_TIMES; 
+
+	int c = editorReadKey(); 
+
+	switch (c) {
+		case '\r': 
+			/* TODO */
+			break; 
+
+		case CTRL_KEY('q'): 
+			if (E.dirty && quit_times > 0) {
+				editorSetStatusMessage(
+					"WARNING!!! File has unsaved changes. " 
+					"Press Ctrl-Q %d more times to quit. ", quit_times
+				); 
+				quit_times--; 
+				return; 
+			}
+			write(STDOUT_FILENO, "\x1b[2J", 4); 
+			write(STDOUT_FILENO, "\x1b[H", 3); 
+			exit(0); 
+			break; 
+
+		case CTRL_KEY('s'): 
+			editorSave(); 
+			break; 
+
+		case HOME_KEY: 
+			E.cx = 0;
+			break;
+
+		case END_KEY: 
+			if (E.cy < E.numrows) {
+				E.cx = E.row[E.cy].size; 
+			}
+			break; 
+
+		case BACKSPACE: 
+		case CTRL_KEY('h'): 
+		case DEL_KEY: 
+			/* TODO */
+			break; 
+
+		case PAGE_UP: 
+		case PAGE_DOWN: {
+			if (c == PAGE_UP) {
+				E.cy = E.rowoff; 
+			} else if (c == PAGE_DOWN) {
+				E.cy = E.rowoff + E.screenrows - 1; 
+				if (E.cy > E.numrows) E.cy = E.numrows; 
+			}
+			int times = E.screenrows; 
+			while (times--) {
+				editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN); 
+			}
+			break;
+		}
+
+		case ARROW_UP:
+		case ARROW_DOWN: 
+		case ARROW_LEFT: 
+		case ARROW_RIGHT: 
+			editorMoveCursor(c); 
+			break; 
+
+		case CTRL_KEY('l'): 
+		case '\x1b': 
+			break; 
+
+		default: 
+			editorInsertChar(c); 
+			break; 
+	}
+
+	quit_times = KILO_QUIT_TIMES; 
+}
+```
+
+在 `editorProcessKeypress()` 函数中, 我们创建了一个静态变量 `quit_times`, 这个变量不会随着函数的退出而销毁. 它记录了当前用户连续按 `Ctrl-Q` 的次数. 每次按 `Ctrl-Q` 都使下方显示警告状态信息并减少 `quit_times` 的值. 当 `quit_times` 的值减少至 `0` 时, 我们才允许退出编辑器. 如果在按下 `Ctrl-Q` 之后按了其它按键, `quit_times` 的值会被重置. 
+
