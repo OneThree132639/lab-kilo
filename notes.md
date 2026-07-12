@@ -4472,3 +4472,202 @@ void editorProcessKeypress(void) {
 
 现在, 我们完成了所有文本编辑操作. 你可以尝试在接下来的过程中使用现在的程序修改程序的源代码. 建议使用 `git` 等工具来保存你的修改, 以便在碰到错误时回滚. 
 
+### 另存为
+
+当前, 如果用户运行 `./kilo` 且不带上参数, 他们可以编辑一个空白的文本, 但是没有方法保存这个文件. 我们需要提示用户在保存新文件的时候输入文件名. 让我们创建一个新的函数 `editorPrompt()`, 它会在状态条中显示提示词并允许用户在提示词之后输入一行文本: 
+
+```c
+/*** prototypes ***/
+
+void editorRefreshScreen(void); 
+
+/*** input ***/
+
+char *editorPrompt(char *prompt) {
+	size_t bufsize = 128; 
+	char *buf = malloc(bufsize); 
+
+	size_t buflen = 0; 
+	buf[0] = '\0'; 
+
+	while (1) {
+		editorSetStatusMessage(prompt, buf); 
+		editorRefreshScreen(); 
+
+		int c = editorReadKey(); 
+		if (c != '\r') {
+			if (buflen != 0) {
+				editorSetStatusMessage(""); 
+				return buf; 
+			}
+		} else if (!iscntrl(c) && c < 128) {
+			if (buflen == bufsize - 1) {
+				bufsize *= 2; 
+				buf = realloc(buf, bufsize); 
+			}
+			buf[buflen++] = c; 
+			buf[buflen] = '\0'; 
+		}
+	}
+}
+```
+
+用户的输入将会保存在 `buf` 中, 它是一个动态调整长度的字符串. 接下来我们进入一个无限循环, 重复设置提示信息, 刷新屏幕, 并等待处理按键. `prompt` 应当是一个含有 `1` 个 `%s` 的字符串, 这样我们可以将用户的输入格式化至提示信息中. 
+
+当用户按下 `Enter` 键且输入不为空的时候, 状态信息清空并返回用户的输入. 否则, 每当用户输入一个可打印字符, 我们就将其添加到 `buf` 中, 如果 `buf` 满了, 则在加入之前为 `buf` 扩容. 同时, 始终保证 `buf` 以 `\0` 结尾. 
+
+我们需要保证输入的键不是 `editorKey` 中的特殊键, 因此我们限制输入键的值小于 `128`. 
+
+接下来, 让我们在 `editorSave()` 函数中, 当 `E.filename` 为 `NULL` 时, 提示用户输入文件名: 
+
+```c
+/*** prototypes ***/
+
+char *editorPrompt(char *prompt); 
+
+/*** file i/o ***/
+
+void editorSave(void) {
+	if (E.filename == NULL) {
+		E.filename = editorPrompt("Save as: %s"); 
+	} 
+
+	int len; 
+	char *buf = editorRowsToString(&len); 
+
+	int fd = open(E.filename, O_RDWR | O_CREAT, 0644); 
+	if (fd != -1) {
+		if (ftruncate(fd, len) != -1) {
+			if (write(fd, buf, len) == len) {
+				close(fd); 
+				free(buf); 
+				E.dirty = 0; 
+				editorSetStatusMessage("%d bytes written to disk", len); 
+				return; 
+			}
+		}
+		close(fd); 
+	}
+
+	free(buf); 
+	editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno)); 
+}
+```
+
+现在我们有了一个基础的另存为功能. 接下来, 让我们实现允许用户按 `Escape` 退出输入提示的功能: 
+
+```c
+/*** input ***/
+
+char *editorPrompt(char *prompt) {
+	size_t bufsize = 128; 
+	char *buf = malloc(bufsize); 
+
+	size_t buflen = 0; 
+	buf[0] = '\0'; 
+
+	while (1) {
+		editorSetStatusMessage(prompt, buf); 
+		editorRefreshScreen(); 
+
+		int c = editorReadKey(); 
+		if (c == '\x1b') {
+			editorSetStatusMessage(""); 
+			free(buf); 
+			return NULL; 
+		} else if (c != '\r') {
+			if (buflen != 0) {
+				editorSetStatusMessage(""); 
+				return buf; 
+			}
+		} else if (!iscntrl(c) && c < 128) {
+			if (buflen == bufsize - 1) {
+				bufsize *= 2; 
+				buf = realloc(buf, bufsize); 
+			}
+			buf[buflen++] = c; 
+			buf[buflen] = '\0'; 
+		}
+	}
+}
+```
+
+当输入提示被取消的时候, 我们使用 `free()` 释放 `buf` 使用的内存并返回 `NULL`. 接下来我们需要在 `editorSave()` 中对 `NULL` 返回值停止保存操作并显示 `Save aborted` 信息: 
+
+```c
+/*** file i/o ***/
+
+void editorSave(void) {
+	if (E.filename == NULL) {
+		E.filename = editorPrompt("Save as: %s (ESC to cancel)"); 
+		if (E.filename == NULL) {
+			editorSetStatusMessage("Save aborted"); 
+			return; 
+		}
+	} 
+
+	int len; 
+	char *buf = editorRowsToString(&len); 
+
+	int fd = open(E.filename, O_RDWR | O_CREAT, 0644); 
+	if (fd != -1) {
+		if (ftruncate(fd, len) != -1) {
+			if (write(fd, buf, len) == len) {
+				close(fd); 
+				free(buf); 
+				E.dirty = 0; 
+				editorSetStatusMessage("%d bytes written to disk", len); 
+				return; 
+			}
+		}
+		close(fd); 
+	}
+
+	free(buf); 
+	editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno)); 
+}
+```
+
+(注意: 在 Bash on Windows 上运行的时候, 你需要连续按 `Escape` 键 `3` 次才能登记为一个 `Escape`)
+
+接下来让我们允许用户在输入提示中使用 `Backspace`, `Ctrl-H` 和 `Delete` 键: 
+
+```c
+/*** input ***/
+
+char *editorPrompt(char *prompt) {
+	size_t bufsize = 128; 
+	char *buf = malloc(bufsize); 
+
+	size_t buflen = 0; 
+	buf[0] = '\0'; 
+
+	while (1) {
+		editorSetStatusMessage(prompt, buf); 
+		editorRefreshScreen(); 
+
+		int c = editorReadKey(); 
+		if (c == DEL_KEY || c == CTRL_KEY('h') || c == BACKSPACE) {
+			if (buflen != 0) bug[--buflen] = '\0'; 
+		} else if (c == '\x1b') {
+			editorSetStatusMessage(""); 
+			free(buf); 
+			return NULL; 
+		} else if (c != '\r') {
+			if (buflen != 0) {
+				editorSetStatusMessage(""); 
+				return buf; 
+			}
+		} else if (!iscntrl(c) && c < 128) {
+			if (buflen == bufsize - 1) {
+				bufsize *= 2; 
+				buf = realloc(buf, bufsize); 
+			}
+			buf[buflen++] = c; 
+			buf[buflen] = '\0'; 
+		}
+	}
+}
+```
+
+(发现了保存新文件时输入文字没有在状态信息中显示且程序无反应的bug). 
