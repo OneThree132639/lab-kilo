@@ -4219,3 +4219,77 @@ void editorProcessKeypress(void) {
 ```
 
 注意到 `Delete` 的效果(删除光标右侧的字符)与将光标右移之后再使用 `Backspace` 相同. 这也是我们实现 `Delete` 的功能的方式. 
+
+### 在行首退格
+
+当前的 `editorDelChar()` 函数在光标位于行首的时候不实现任何功能. 当用户在行首按下 `Backspace` 时, 我们希望将当前行的文本添加到上一行末尾, 并删除当前行. 在文本中, 这相当于删除掉了两行文本之间的 `\n` 字符. 
+
+因此, 我们需要两种新的函数: 将一个行添加到另一行末尾以及删除行. 让我们首先实现 `editorDelRow()` 函数, 其中, 它需要 `editorFreeRow()` 函数来释放 `erow` 中使用的内存资源: 
+
+```c
+/*** row operations ***/
+
+void editorFreeRow(erow *row) {
+	free(row->render); 
+	free(row->chars); 
+}
+
+void editorRowDelRow(int at) {
+	if (at < 0 || at >= E.numrows) return; 
+	editorFreeRow(&E.row[at]); 
+	memmove(&E.row[at], &E.row[at + 1], sizeof(erow) * (E.numrows - at - 1)); 
+	E.numrows--; 
+	E.dirty++; 
+}
+```
+
+`editorDelRow()` 与 `editorRowDelChar()` 函数很想死, 因为它们实现的都是按索引删除一组元素中的一个元素的功能. 
+
+首先检查索引 `at`. 接下来释放对应行管理的内存资源, 然后将该行之后的所有行前移一位, 并将 `E.numrows` 减 `1`. 最后将 `E.dirty` 自增. 
+
+接下来让我们实现 `editorRowAppendString()`, 它将一个字符串添加到一行的行末: 
+
+```c
+/*** row operations ***/
+
+void editorRowAppendString(erow *row, char *s, size_t len) {
+	row->chars = realloc(row->chars, row->size + len + 1); 
+	memcpy(&row->chars[row->size], s, len); 
+	row->size += len; 
+	row->chars[row->size] = '\0'; 
+	editorUpdateRow(row); 
+	E.dirty++; 
+}
+```
+
+新行的大小是 `row->size + len + 1`(包括 `\0`), 因此我们首先为其重分配这个大小的空间, 接着简单将字符复制到对应行之后, 更新 `row->size`, 使用 `editorUpdateRow()` 函数更新 `row->render`, 并将 `E.dirty` 自增. 
+
+现在我们可以在 `editorDelChar()` 函数中更新光标在行首的情况: 
+
+```c
+/*** editor operations ***/
+
+void editorDelChar(void) {
+	if (E.cy == E.numrows) return; 
+	if (E.cx == 0 && E.cy == 0) return; 
+
+	erow *row = &E.row[E.cy]; 
+	if (E.cx > 0) {
+		editorRowDelChar(row, E.cx - 1); 
+		E.cx--; 
+	} else {
+		E.cx = E.row[E.cy - 1].size; 
+		editorRowAppendString(&E.row[E.cy - 1], row->chars, row->size); 
+		editorRowDelRow(E.cy); 
+		E.cy--; 
+	}
+}
+```
+
+如果光标位于第 `1` 行的行首, 不会进行任何操作, 因此直接返回. 否则, 如果 `E.cx == 0`, 我们就调用 `editorRowAppendString()` 函数和 `editorDelRow()` 函数, 将光标设置为删除之前上一行的行末. 
+
+注意到 `Delete` 键也能正常工作, 这是因为首先光标进行右移, 而我们已经实现了在行末的右移为移动到下一行行首的的逻辑. 
+
+(此处发现 `Delete` 键功能存在问题, 在 MacOS Terminal 和 iTerm 上使用 `fn+Backspace` 组合键会在光标处输入 `~`)
+(在 MacOS iTerm 上发现 `fn+up`, `fn+down` 存在相同输入 `~` 的问题, 在 Terminal 中 `fn+up`, `fn+down`, `fn+left`, `fn+right` 依旧控制终端页面滚动, 未被程序捕获)
+
