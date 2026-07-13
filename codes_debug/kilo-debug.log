@@ -1,0 +1,33 @@
+Debug log initialized. 
+97 ('a')
+98 ('b')
+99 ('c')
+100 ('d')
+101 ('e')
+102 ('f')
+103 ('g')
+19
+Prompt: Save as: %s (ESC to cancel), Buffer: 
+97 ('a')
+Prompt: Save as: %s (ESC to cancel), Buffer: 
+98 ('b')
+Prompt: Save as: %s (ESC to cancel), Buffer: 
+99 ('c')
+Prompt: Save as: %s (ESC to cancel), Buffer: 
+100 ('d')
+Prompt: Save as: %s (ESC to cancel), Buffer: 
+46 ('.')
+Prompt: Save as: %s (ESC to cancel), Buffer: 
+116 ('t')
+Prompt: Save as: %s (ESC to cancel), Buffer: 
+120 ('x')
+Prompt: Save as: %s (ESC to cancel), Buffer: 
+116 ('t')
+Prompt: Save as: %s (ESC to cancel), Buffer: 
+13
+Prompt: Save as: %s (ESC to cancel), Buffer: 
+27
+17
+17
+17
+17

@@ -2,3 +2,8 @@
 
 codes/kilo
 codes/text.txt
+codes/kilo.dSYM/**
+
+codes_debug/kilo
+codes_debug/text.txt
+codes_debug/kilo.dSYM/**

@@ -71,6 +71,31 @@ void editorSetStatusMessage(const char *fmt, ...);
 void editorRefreshScreen(void); 
 char *editorPrompt(char *prompt); 
 
+/*** debug ***/
+
+#define DEBUG_LOG_FILE "kilo-debug.log"
+
+void debug_log_init(void) {
+	FILE *fp = fopen(DEBUG_LOG_FILE, "w"); 
+	if (!fp) return; 
+
+	fprintf(fp, "Debug log initialized. \n"); 
+	fclose(fp); 
+}
+
+void debug_log(const char *fmt, ...) {
+	FILE *fp = fopen(DEBUG_LOG_FILE, "a"); 
+	if (!fp) return; 
+
+	va_list ap; 
+	va_start(ap, fmt); 
+	vfprintf(fp, fmt, ap); 
+	va_end(ap); 
+
+	fprintf(fp, "\n"); 
+	fclose(fp); 
+}
+
 /*** terminal ***/
 
 void die(const char *s) {
@@ -201,20 +226,6 @@ int editorRowCxToRx(erow *row, int cx) {
 		rx++; 
 	}
 	return rx; 
-}
-
-int editorRowRxToCx(erow *row, int rx) {
-	int cur_rx = 0; 
-	int cx; 
-	for (cx = 0; cx < row->size; cx++) {
-		if (row->chars[cx] == '\t') {
-			cur_rx += (KILO_TAB_STOP - 1) - (cur_rx % KILO_TAB_STOP); 
-		}
-		cur_rx++; 
-
-		if (cur_rx > rx) return cx; 
-	}
-	return cx; 
 }
 
 void editorUpdateRow(erow *row) {
@@ -414,27 +425,6 @@ void editorSave(void) {
 	editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno)); 
 }
 
-/*** find ***/
-
-void editorFind(void) {
-	char *query = editorPrompt("Search: %s (ESC to cancel)"); 
-	if (query == NULL) return; 
-
-	int i; 
-	for (i = 0; i < E.numrows; i++) {
-		erow *row = &E.row[i]; 
-		char *match = strstr(row->render, query); 
-		if (match) {
-			E.cy = i; 
-			E.cx = editorRowRxToCx(row, match - row->render); 
-			E.rowoff = E.numrows; 
-			break; 
-		}
-	}
-
-	free(query); 
-}
-
 /*** append buffer ***/
 
 struct abuf {
@@ -583,29 +573,42 @@ char *editorPrompt(char *prompt) {
 	buf[0] = '\0'; 
 
 	while (1) {
+		debug_log("Prompt: %s, Buffer: %s", prompt, buf); 
 		editorSetStatusMessage(prompt, buf); 
 		editorRefreshScreen(); 
 
 		int c = editorReadKey(); 
+		if (c <= 127 && !iscntrl(c)) {
+			debug_log("%d (\'%c\')", c, c); 
+		} else {
+			debug_log("%d", c); 
+		}
 		if (c == DEL_KEY || c == CTRL_KEY('h') || c == BACKSPACE) {
+			debug_log("Deleting character: %d", c); 
 			if (buflen != 0) buf[--buflen] = '\0'; 
 		} else if (c == '\x1b') {
+			debug_log("Escape key pressed: %d", c); 
 			editorSetStatusMessage(""); 
 			free(buf); 
 			return NULL; 
 		} else if (c == '\r') {
+			debug_log("Enter key pressed: %d", c); 
 			if (buflen != 0) {
 				editorSetStatusMessage(""); 
 				return buf; 
 			}
 		} else if (!iscntrl(c) && c < 128) {
+			debug_log("Entering readable character: %d (\'%c\')", c, c); 
 			if (buflen == bufsize - 1) {
 				bufsize *= 2; 
 				buf = realloc(buf, bufsize); 
 			}
 			buf[buflen++] = c; 
 			buf[buflen] = '\0'; 
+		} else {
+			debug_log("Unhandled key: %d", c); 
 		}
+		
 	}
 }
 
@@ -652,6 +655,11 @@ void editorProcessKeypress(void) {
 	static int quit_times = KILO_QUIT_TIMES; 
 
 	int c = editorReadKey(); 
+	if (c <= 127 && !iscntrl(c)) {
+		debug_log("%d (\'%c\')", c, c); 
+	} else {
+		debug_log("%d", c); 
+	}
 
 	switch (c) {
 		case '\r': 
@@ -684,10 +692,6 @@ void editorProcessKeypress(void) {
 			if (E.cy < E.numrows) {
 				E.cx = E.row[E.cy].size; 
 			}
-			break; 
-
-		case CTRL_KEY('f'): 
-			editorFind(); 
 			break; 
 
 		case BACKSPACE: 
@@ -753,13 +757,15 @@ void initEditor(void) {
 }
 
 int main(int argc, char *argv[]) {
+	debug_log_init(); 
+
 	enableRawMode(); 
 	initEditor(); 
 	if (argc >= 2) {
 		editorOpen(argv[1]); 
 	}
 
-	editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find"); 
+	editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit"); 
 
 	while (1) {
 		editorRefreshScreen(); 

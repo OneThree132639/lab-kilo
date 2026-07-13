@@ -4495,7 +4495,7 @@ char *editorPrompt(char *prompt) {
 		editorRefreshScreen(); 
 
 		int c = editorReadKey(); 
-		if (c != '\r') {
+		if (c == '\r') {
 			if (buflen != 0) {
 				editorSetStatusMessage(""); 
 				return buf; 
@@ -4575,7 +4575,7 @@ char *editorPrompt(char *prompt) {
 			editorSetStatusMessage(""); 
 			free(buf); 
 			return NULL; 
-		} else if (c != '\r') {
+		} else if (c == '\r') {
 			if (buflen != 0) {
 				editorSetStatusMessage(""); 
 				return buf; 
@@ -4653,7 +4653,7 @@ char *editorPrompt(char *prompt) {
 			editorSetStatusMessage(""); 
 			free(buf); 
 			return NULL; 
-		} else if (c != '\r') {
+		} else if (c == '\r') {
 			if (buflen != 0) {
 				editorSetStatusMessage(""); 
 				return buf; 
@@ -4670,4 +4670,190 @@ char *editorPrompt(char *prompt) {
 }
 ```
 
-(发现了保存新文件时输入文字没有在状态信息中显示且程序无反应的bug). 
+## 搜索
+
+接下来, 让我们利用 `editorPrompt()` 函数实现一个最小的搜索功能. 当用户查询一串字符的时候, 我们将会遍历文件中的所有行, 如果一行中包含他们需要查找的字符串, 将光标移动至对应的匹配位置: 
+
+```c
+/*** find ***/
+
+void editorFind(void) {
+	char *query = editorPrompt("Search: %s (ESC to cancel)"); 
+	if (query == NULL) return; 
+
+	int i; 
+	for (i = 0; i < E.numrows; i++) {
+		erow *row = &E.row[i]; 
+		char *match = strstr(row->render, query); 
+		if (match) {
+			E.cy = i; 
+			E.cx = match - row->render; 
+			E.rowoff = E.numrows; 
+			break; 
+		}
+	}
+
+	free(query); 
+}
+```
+
+ - `char *strstr(const char *s1, const char *s2)`: 来自 `<string.h>`. 在 `s1` 指向的字符串中查找 `s2` 指向的字符串序列. 如果找到, 返回指向 `s1` 中第 `1` 个匹配的起始位置的指针, 否则返回 `NULL`. 
+
+如果在输入过程中按 `Escape` 取消输入提示, `editorPrompt()` 函数将会返回 `NULL`, 停止搜索. 
+
+否则, 逐行遍历文件, 使用 `strstr()` 函数检查 `query` 是否为当前行的字串. 通过 `match - row->render`, 我们可以得到 `query` 在当前行的起始位置, 这就是我们将设置光标所在的位置. 最后, 我们将 `E.rowoff` 设置为 `E.numrows`, 这会使屏幕滚动至文件的最下方, 之后在 `editorScroll()` 函数中将会将文件上滚直至光标所在位置, 这样可以确保搜索结果始终在屏幕的第 `1` 行显示. 这样可以避免用户在整个屏幕上寻找匹配结果. 
+
+当前函数存在一个问题, 我们将 `render` 的索引赋值给了 `E.cx`, 但是 `E.cx` 是指向 `chars` 的索引, 如果在匹配的左侧存在 `Tab`, 光标就会移动至错误的位置. 我们需要在赋值之前将 `render` 索引转换为 `chars` 索引. 让我们创建 `eitorRowRxToCx()` 函数实现这个功能, 它与 `editorRowCxToRx()` 函数功能相反, 但是具有类似的代码: 
+
+```c
+/*** row operations ***/
+
+int editorRowRxToCx(erow *row, int rx) {
+	int cur_rx = 0; 
+	int cx; 
+	for (cx = 0; cx < row->size; cx++) {
+		if (row->chars[cx] == '\t') {
+			cur_rx += (KILO_TAB_STOP - 1) - (cur_rx % KILO_TAB_STOP); 
+		}
+		cur_rx++; 
+
+		if (cur_rx > rx) return cx; 
+	}
+	return cx; 
+}
+```
+
+`editorRowRxToCx()` 的思想是xian函数功能是, 通过 `cur_rx` 追踪当前字符的 `render` 索引, 当 `cur_rx` 超过 `rx` 时, 返回当前字符的索引. 最后的返回语句确保当 `rx` 参数超出范围时函数能够返回. 
+
+接下来我们可以调用 `editorRxToCx()` 将匹配索引转换为 `chars` 索引并赋值给 `E.cx`: 
+
+```c
+/*** find ***/
+
+void editorFind(void) {
+	char *query = editorPrompt("Search: %s (ESC to cancel)"); 
+	if (query == NULL) return; 
+
+	int i; 
+	for (i = 0; i < E.numrows; i++) {
+		erow *row = &E.row[i]; 
+		char *match = strstr(row->render, query); 
+		if (match) {
+			E.cy = i; 
+			E.cx = editorRowRxToCx(row, match - row->render); 
+			E.rowoff = E.numrows; 
+			break; 
+		}
+	}
+
+	free(query); 
+}
+```
+
+最后, 让我们将 `Ctrl-F` 组合键绑定到 `editorFind()` 函数, 并将其添加至 `main()` 函数中设置的提示信息中: 
+
+```c
+/*** input ***/
+
+void editorProcessKeypress(void) {
+	static int quit_times = KILO_QUIT_TIMES; 
+
+	int c = editorReadKey(); 
+
+	switch (c) {
+		case '\r': 
+			editorInsertNewline(); 
+			break; 
+
+		case CTRL_KEY('q'): 
+			if (E.dirty && quit_times > 0) {
+				editorSetStatusMessage(
+					"WARNING!!! File has unsaved changes. " 
+					"Press Ctrl-Q %d more times to quit. ", quit_times
+				); 
+				quit_times--; 
+				return; 
+			}
+			write(STDOUT_FILENO, "\x1b[2J", 4); 
+			write(STDOUT_FILENO, "\x1b[H", 3); 
+			exit(0); 
+			break; 
+
+		case CTRL_KEY('s'): 
+			editorSave(); 
+			break; 
+
+		case HOME_KEY: 
+			E.cx = 0;
+			break;
+
+		case END_KEY: 
+			if (E.cy < E.numrows) {
+				E.cx = E.row[E.cy].size; 
+			}
+			break; 
+
+		case CTRL_KEY('f'): 
+			editorFind(); 
+			break; 
+
+		case BACKSPACE: 
+		case CTRL_KEY('h'): 
+		case DEL_KEY: 
+			if (c == DEL_KEY) editorMoveCursor(ARROW_RIGHT); 
+			editorDelChar(); 
+			break; 
+
+		case PAGE_UP: 
+		case PAGE_DOWN: {
+			if (c == PAGE_UP) {
+				E.cy = E.rowoff; 
+			} else if (c == PAGE_DOWN) {
+				E.cy = E.rowoff + E.screenrows - 1; 
+				if (E.cy > E.numrows) E.cy = E.numrows; 
+			}
+			int times = E.screenrows; 
+			while (times--) {
+				editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN); 
+			}
+			break;
+		}
+
+		case ARROW_UP:
+		case ARROW_DOWN: 
+		case ARROW_LEFT: 
+		case ARROW_RIGHT: 
+			editorMoveCursor(c); 
+			break; 
+
+		case CTRL_KEY('l'): 
+		case '\x1b': 
+			break; 
+
+		default: 
+			editorInsertChar(c); 
+			break; 
+	}
+
+	quit_times = KILO_QUIT_TIMES; 
+}
+
+/*** init ***/
+
+int main(int argc, char *argv[]) {
+	enableRawMode(); 
+	initEditor(); 
+	if (argc >= 2) {
+		editorOpen(argv[1]); 
+	}
+
+	editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find"); 
+
+	while (1) {
+		editorRefreshScreen(); 
+		editorProcessKeypress(); 
+	}
+
+	return 0; 
+}
+```
