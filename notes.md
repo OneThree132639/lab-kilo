@@ -5145,3 +5145,62 @@ void editorFind(void) {
 	}
 }
 ```
+
+## 语法高亮
+
+### 带颜色数字
+
+让我们从给数字使用红色高亮开始, 在屏幕上添加一些颜色: 
+
+```c
+/*** output ***/
+
+void editorDrawRows(struct abuf *ab) {
+	int y; 
+	for (y = 0; y < E.screenrows; y++) {
+		int filerow = y + E.rowoff; 
+		if (filerow >= E.numrows) {
+			if (E.numrows == 0 && y == E.screenrows / 3) {
+				char welcome[80]; 
+				int welcomelen = snprintf(welcome, sizeof(welcome), "Kilo editor -- version %s", KILO_VERSION); 
+				if (welcomelen > E.screencols) welcomelen = E.screencols; 
+				int padding = (E.screencols - welcomelen) / 2; 
+				if (padding) {
+					abAppend(ab, "~", 1); 
+					padding--; 
+				}
+				while (padding--) abAppend(ab, " ", 1); 
+				abAppend(ab, welcome, welcomelen); 
+			} else {
+				abAppend(ab, "~", 1);
+			}
+		} else {
+			int len = E.row[filerow].rsize - E.coloff; 
+			if (len < 0) len = 0; 
+			if (len > E.screencols) len = E.screencols; 
+			char *c = &E.row[filerow].render[E.coloff]; 
+			int j; 
+			for (j = 0; j < len; j++) {
+				if (isdigit(c[j])) {
+					abAppend(ab, "\x1b[31m", 5); 
+					abAppend(ab, &c[j], 1); 
+					abAppend(ab, "\x1b[39m", 5); 
+				} else {
+					abAppend(ab, &c[j], 1); 
+				}
+			}
+		}
+
+		
+		abAppend(ab, "\x1b[K", 3); 
+		abAppend(ab, "\r\n", 2);
+	}
+}
+```
+
+ - `int isdigit(int c)`: 来自 `<ctype.h>`. 当 `c` 是十进制数位的时候返回非零值, 否则返回 `0`. 
+
+我们现在逐字符处理 `render` 的字串而不是简单将其通过 `abAppend` 添加进总字符串中. 如果判断字符为数位, 则通过 `m` 转义序列为其着色. 
+
+此处通过 `ANSI escape codes` 为文本进行着色. 其参数 `30-37` 设置文本颜色, `39` 重置颜色, 而 `31` 就是红色. 在使用 `\x1b[31m` 将其之后的文本变为红色之后, 使用 `\x1b[39m` 恢复默认设置. 
+
