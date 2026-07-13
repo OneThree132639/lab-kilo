@@ -5029,3 +5029,119 @@ void editorFind(void) {
 
 `query` 为 `NULL` 代表用户通过按 `Escape` 退出了搜索模式, 此时需要恢复光标位置. 
 
+### 向前搜索和向后搜索
+
+我们希望添加的最后一个功能是允许用户使用方向键跳转至前一个或者后一个搜索结果. 按上方向键和左方向键将跳转至前一个搜索结果, 按下方向键和右方向键将跳转至下一个搜索结果. 
+
+为了实现这个功能, 我们将在回调函数中添加两个静态变量. `last_match` 存储上一个匹配所在的行的索引, `-1` 表示不存在上一个匹配, `direction` 存储搜索的方向, `1` 表示向前搜索, `-1` 表示向后搜索: 
+
+```c
+/*** find ***/
+
+void editorFindCallback(char *query, int key) {
+	static int last_match = -1; 
+	static int direction = 1; 
+
+	if (key == '\r' || key == '\x1b') {
+		last_match = -1; 
+		direction = 1; 
+		return;  
+	} else if (key == ARROW_RIGHT || key == ARROW_DOWN) {
+		direction = 1; 
+	} else if (key == ARROW_LEFT || key == ARROW_UP) {
+		direction = -1; 
+	} else {
+		last_match = -1; 
+		direction = 1; 
+	}
+
+	int i; 
+	for (i = 0; i < E.numrows; i++) {
+		erow *row = &E.row[i]; 
+		char *match = strstr(row->render, query); 
+		if (match) {
+			E.cy = i; 
+			E.cx = editorRowRxToCx(row, match - row->render); 
+			E.rowoff = E.numrows; 
+			break; 
+		}
+	}
+}
+```
+
+当按键不为方向键时, 我们总是将 `last_match` 设置为 `-1`, 因此我们只有在按下方向键的时候才会搜索上一个或者下一个匹配. 除了按下左方向键或者上方向键的时候 `direction` 的值都是 `1`, 这意味着我们在没有特别指定的情况下总是向前搜索. 
+
+如果按下的是 `Enter` 或 `Escape` 键, 那么我们将要离开本次搜索, 此时应当重置 `last_match` 和 `direction` 的值以准备下一次搜索. 
+
+接下来让我们将这些变量投入应用: 
+
+```c
+/*** find ***/
+
+void editorFindCallback(char *query, int key) {
+	static int last_match = -1; 
+	static int direction = 1; 
+
+	if (key == '\r' || key == '\x1b') {
+		last_match = -1; 
+		direction = 1; 
+		return; 
+	} else if (key == ARROW_RIGHT || key == ARROW_DOWN) {
+		direction = 1; 
+	} else if (key == ARROW_LEFT || key == ARROW_UP) {
+		direction = -1; 
+	} else {
+		last_match = -1; 
+		direction = 1; 
+	}
+
+	if (last_match == -1) direction = 1; 
+	int current = last_match; 
+	int i; 
+	for (i = 0; i < E.numrows; i++) {
+		current += direction; 
+		if (current == -1) current = E.numrows - 1; 
+		else if (current == E.numrows) current = 0; 
+
+		erow *row = &E.row[current]; 
+		char *match = strstr(row->render, query); 
+		if (match) {
+			last_match = current; 
+			E.cy = current;  
+			E.cx = editorRowRxToCx(row, match - row->render); 
+			E.rowoff = E.numrows; 
+			break; 
+		}
+	}
+}
+```
+
+`current` 是我们当前正在搜索的行的索引. 如果存在上一个匹配结果, 则向前在下一行搜索或向后在上一行搜索. 如果没有上一个匹配结果, 则从文件开头并向前搜索. 
+
+中间的分支语句使超出文件末尾的 `current` 回到行首或反之. 
+
+当寻找到一个匹配的时候, 将 `last_match` 设置为当前行索引, 当用户下一次按动方向键的时候, 我们就将从此行开始搜索. 
+
+最后, 更新提示文本以告知用户使用方向键跳转匹配结果的功能: 
+
+```c
+/*** find ***/
+
+void editorFind(void) {
+	int saved_cx = E.cx; 
+	int saved_cy = E.cy; 
+	int saved_coloff = E.coloff; 
+	int saved_rowoff = E.rowoff; 
+
+	char *query = editorPrompt("Search: %s (Use ESC/Arrows/Enter)", editorFindCallback); 
+
+	if (query) {
+		free(query); 
+	} else {
+		E.cx = saved_cx; 
+		E.cy = saved_cy; 
+		E.coloff = saved_coloff; 
+		E.rowoff = saved_rowoff; 
+	}
+}
+```
