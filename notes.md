@@ -5580,3 +5580,110 @@ void editorFindCallback(char *query, int key) {
 
 由于 `editorFindCallback()` 函数在被调用的时候首先检查 `saved_hl` 是否为空并释放资源, 它保证了不会出现内存泄漏的问题. 
 
+### 数字着色
+
+接下来让我们正确地高亮数字. 首先, 让我们将 `editorUpdateSyntax()` 函数中的 `for` 循坏改为 `while` 循环, 以便我们在一次迭代中可以处理多个字符. (虽然在处理数字的时候, 我们每次仍然只处理 `1` 个字符, 但是在之后这种处理会起到作用. )
+
+```c
+/*** syntax highlighting ***/
+
+void editorUpdateSyntax(erow *row) {
+	row->hl = realloc(row->hl, row->rsize); 
+	memset(row->hl, HL_NORMAL, row->rsize); 
+
+	int i = 0; 
+	while (i < row->size) {
+		char c = row->render[i]; 
+
+		if (isdigit(c)) {
+			row->hl[i] = HL_NUMBER; 
+		}
+
+		i++; 
+	}
+}
+```
+
+接下来让我们定义一个 `is_seperator()` 函数, 它接收一个字符, 如果该字符为分隔字符则返回真值. 
+
+```c
+/*** syntax highlighting ***/
+
+int is_seperator(int c) {
+	return isspace(c) || c == '\0' || strchr(",.()+-/*=~%<>[];", c) != NULL; 
+}
+```
+
+ - `int isspace(int c)`: 来自 `<ctype.h>`. 若 `c` 是空白字符(`' '`, `'\f'`(换页符), `'\n'`(换行符), `'\r'`(回车符), `'\t'`(制表符), `'\v'`(垂直制表符)等)返回非零值, 否则返回零值. 
+ - `char *strchr(const char *s, int c)`: 来自 `<string.h>`. 在 `s` 指向的字符串(包括结尾的 `\0`)中查找字符 `c` (转换为 `unsigned char` 类型), 如果查找到, 则返回一个指向字符串中对应字符的指针, 否则返回空指针. 
+
+现在, 位于标识符(如 `int32_t`)内的数字也会被程序识别. 为了修复这个问题, 我们要求数字必须位于某个分隔字符之后, 分隔字符包括空白字符, 标点符号, 以及 `\0`. 
+
+在 `editorUpdateSyntax()` 函数中添加 `prev_sep` 变量以记录前一个字符是否为分隔字符, 然后利用它来判断并正确高亮数字: 
+
+```c
+/*** syntax highlighting ***/
+
+void editorUpdateSyntax(erow *row) {
+	row->hl = realloc(row->hl, row->rsize); 
+	memset(row->hl, HL_NORMAL, row->rsize); 
+
+	int prev_sep = 1; 
+
+	int i = 0; 
+	while (i < row->size) {
+		char c = row->render[i]; 
+		unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL; 
+
+		if (isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) {
+			row->hl[i] = HL_NUMBER; 
+			i++; 
+			prev_sep = 0; 
+			continue; 
+		}
+
+		prev_sep = is_seperator(c); 
+		i++; 
+	}
+}
+```
+
+我们将 `prev_sep` 初始化为 `1`, 因为一行的开头可以被认为是一个分隔符(否则一行开头的数字不会被高亮). 
+
+`prev_hl` 被设置为前一个字符的高亮类型. 当前字符想要被标注为 `HL_NUMBER` 类型, 要么其之前是一个分隔字符, 要么是一个已经被标注为 `HL_NUMBER` 类型的字符. 
+
+当我们希望高亮当前字符的时候, 我们将 `i` 自增以“消耗”这个字符, 将 `prev_sep` 设为 `0` 以表示我们正在某个高亮部分的中间, 然后 `continue` 这个循环. 这个模式将在其它高亮类型中使用. 
+
+如果不高亮当前字符, 则将 `prev_sep` 设置为当前字符是否为分隔字符的判断结果, 并将 `i` 自增 `1`. 
+
+接下来让我们支持带小数点的数字的高亮: 
+
+```c
+/*** syntax highlighting ***/
+
+void editorUpdateSyntax(erow *row) {
+	row->hl = realloc(row->hl, row->rsize); 
+	memset(row->hl, HL_NORMAL, row->rsize); 
+
+	int prev_sep = 1; 
+
+	int i = 0; 
+	while (i < row->size) {
+		char c = row->render[i]; 
+		unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL; 
+
+		if ((isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) || (c == '.' && prev_hl == HL_NUMBER)) {
+			row->hl[i] = HL_NUMBER; 
+			i++; 
+			prev_sep = 0; 
+			continue; 
+		}
+
+		prev_sep = is_seperator(c); 
+		i++; 
+	}
+}
+```
+
+这样可以把小数点也考虑在内. (经检测没有排除多个 `.` 连接数字的情况)
+
