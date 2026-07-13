@@ -5204,3 +5204,244 @@ void editorDrawRows(struct abuf *ab) {
 
 此处通过 `ANSI escape codes` 为文本进行着色. 其参数 `30-37` 设置文本颜色, `39` 重置颜色, 而 `31` 就是红色. 在使用 `\x1b[31m` 将其之后的文本变为红色之后, 使用 `\x1b[39m` 恢复默认设置. 
 
+### 重构语法高亮
+
+我们希望实现对字符串、关键字、注释等等的语法高亮. 这就要求我们不能仅仅根据一个字符的属性就确定它的颜色(像处理数位那样). 我们希望在显示一行文本之前确定它的高亮部分, 并且在一行文本发生变化的时候对其重新进行高亮. 为了实现这个目标, 我们需要将一行文本的高亮方式存储为一个数组, 首先在 `erow` 结构体中新增一个字段 `hl`, 意为 `highlight`: 
+
+```c
+/*** data ***/
+
+typedef struct erow {
+	int size; 
+	int rsize; 
+	char *chars; 
+	char *render; 
+	unsigned char *hl; 
+} erow; 
+
+/*** row operations ***/
+
+void editorInsertRow(int at, char *s, size_t len) {
+	if (at < 0 || at > E.numrows) return; 
+
+	E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1)); 
+	memmove(&E.row[at + 1], &E.row[at], sizeof(erow) * (E.numrows - at)); 
+
+	E.row[at].size = len; 
+	E.row[at].chars = malloc(len + 1); 
+	memcpy(E.row[at].chars, s, len); 
+	E.row[at].chars[len] = '\0'; 
+
+	E.row[at].rsize = 0; 
+	E.row[at].render = NULL; 
+	E.row[at].hl = NULL; 
+	editorUpdateRow(&E.row[at]); 
+
+	E.numrows++; 
+	E.dirty++; 
+}
+
+void editorFreeRow(erow *row) {
+	free(row->render); 
+	free(row->chars); 
+	free(row->hl); 
+}
+```
+
+`hl` 是一个 `unsigned char` 类型的数组, 它的取值为 `0` 至 `255`. 每一个值对应 `render` 中的字符的语法类型(字符串、注释、数位等). 让我们创建一个枚举类型, 枚举所有 `hl` 数组可以取的值: 
+
+```c
+/*** defines ***/
+
+enum editorHighlight {
+	HL_NORMAL = 0, 
+	HL_NUMBER
+}; 
+```
+
+接下来让我们继续将重点放在高亮数位上. 我们希望每一个是数位的字符对应的 `hl` 值是 `HL_NUMBER`, 并且其它字符对应的值是 `HL_NORMAL`. 
+
+让我们创建一个新区域 `/*** syntax highlighting ***/`, 并创建函数 `editorUpdateSyntax()` 函数, 用于遍历 `erow` 中的字符并设置对应的 `hl` 值: 
+
+```c
+/*** syntax highlighting ***/
+
+void editorUpdateSyntax(erow *row) {
+	row->hl = realloc(row->hl, row->rsize); 
+	memset(row->hl, HL_NORMAL, row->rsize); 
+
+	int i; 
+	for (i = 0; i < row->rsize; i++) {
+		if (isdigit(row->render[i])) {
+			row->hl[i] = HL_NUMBER; 
+		}
+	}
+}
+```
+
+ - `void *memset(void *s, int c, size_t n)`: 来自 `<string.h>`. 将 `c`(转换为 `unsigned char` 类型)复制到 `s` 指向的内存的前 `n` 歌字节. 正常复制的返回值为 `s`. 
+
+首先使用 `realloc()` 分配内存, 由于 `hl` 的长度与 `render` 相同, 因此分配的长度应当为 `rsize`. 再将 `hl` 的所有值均设置为 `HL_NORMAL`. 最后遍历字符, 将数位字符对应的 `hl` 值设置为 `HL_NUMBER`. 
+
+在 `editorUpdateRow()` 中, 完成对 `render` 的处理之后, 调用 `editorUpdateSyntax()` 函数处理 `hl`: 
+
+```c
+/*** row operations ***/
+
+void editorUpdateRow(erow *row) {
+	int tabs = 0; 
+	int j; 
+	for (j = 0; j < row->size; j++) {
+		if (row->chars[j] == '\t') tabs++; 
+	}
+
+	free(row->render); 
+	row->render = malloc(row->size + tabs * (KILO_TAB_STOP - 1) + 1); 
+ 
+	int idx = 0; 
+	for (j = 0; j < row->size; j++) {
+		if (row->chars[j] == '\t') {
+			row->render[idx++] = ' '; 
+			while (idx % KILO_TAB_STOP != 0) row->render[idx++] = ' '; 
+		} else {
+			row->render[idx++] = row->chars[j]; 
+		}
+	}
+	row->render[idx] = '\0'; 
+	row->rsize = idx; 
+
+	editorUpdateSyntax(row); 
+}
+```
+
+接下来, 让我们实现 `editorSyntaxToColor()` 函数, 实现 `hl` 值到 `m` 转义序列颜色的编码的转换: 
+
+```c
+/*** syntax highlighting ***/
+
+int editorSyntaxToColor(int hl) {
+	switch (hl) {
+		case HL_NUMBER: return 31; 
+		default: return 37; 
+	}
+}
+```
+
+对于 `HL_NORMAL`, 将在之后进行单独处理. 当前对其它枚举值都使用 `37`, 表示前景白色. 
+
+最后, 绘制高亮文本: 
+
+```c
+/*** output ***/
+
+void editorDrawRows(struct abuf *ab) {
+	int y; 
+	for (y = 0; y < E.screenrows; y++) {
+		int filerow = y + E.rowoff; 
+		if (filerow >= E.numrows) {
+			if (E.numrows == 0 && y == E.screenrows / 3) {
+				char welcome[80]; 
+				int welcomelen = snprintf(welcome, sizeof(welcome), "Kilo editor -- version %s", KILO_VERSION); 
+				if (welcomelen > E.screencols) welcomelen = E.screencols; 
+				int padding = (E.screencols - welcomelen) / 2; 
+				if (padding) {
+					abAppend(ab, "~", 1); 
+					padding--; 
+				}
+				while (padding--) abAppend(ab, " ", 1); 
+				abAppend(ab, welcome, welcomelen); 
+			} else {
+				abAppend(ab, "~", 1);
+			}
+		} else {
+			int len = E.row[filerow].rsize - E.coloff; 
+			if (len < 0) len = 0; 
+			if (len > E.screencols) len = E.screencols; 
+			char *c = &E.row[filerow].render[E.coloff]; 
+			unsigned char *hl = &E.row[filerow].hl[E.coloff]; 
+			int j; 
+			for (j = 0; j < len; j++) {
+				if (hl[j] == HL_NORMAL) {
+					abAppend(ab, "\x1b[39m", 5); 
+					abAppend(ab, &c[j], 1); 
+				} else {
+					int color = editorSyntaxToColor(hl[j]); 
+					char buf[16]; 
+					int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", color); 
+					abAppend(ab, buf, clen); 
+					abAppend(ab, &c[j], 1); 
+				}
+			}
+			abAppend(ab, "\x1b[39m", 5); 
+		}
+
+		
+		abAppend(ab, "\x1b[K", 3); 
+		abAppend(ab, "\r\n", 2);
+	}
+}
+```
+
+上述代码与之前为数位着色的代码具有相同的效果. 它在每一个字符之前都确定其对应的 `m` 转义序列. 
+
+由于同一语法的字符大多都是连续的, 我们没有必要在每个字符的前面都添加其对应的转义序列, 而是在颜色发生变化的时候使用转义字符: 
+
+```c
+/*** output ***/
+
+void editorDrawRows(struct abuf *ab) {
+	int y; 
+	for (y = 0; y < E.screenrows; y++) {
+		int filerow = y + E.rowoff; 
+		if (filerow >= E.numrows) {
+			if (E.numrows == 0 && y == E.screenrows / 3) {
+				char welcome[80]; 
+				int welcomelen = snprintf(welcome, sizeof(welcome), "Kilo editor -- version %s", KILO_VERSION); 
+				if (welcomelen > E.screencols) welcomelen = E.screencols; 
+				int padding = (E.screencols - welcomelen) / 2; 
+				if (padding) {
+					abAppend(ab, "~", 1); 
+					padding--; 
+				}
+				while (padding--) abAppend(ab, " ", 1); 
+				abAppend(ab, welcome, welcomelen); 
+			} else {
+				abAppend(ab, "~", 1);
+			}
+		} else {
+			int len = E.row[filerow].rsize - E.coloff; 
+			if (len < 0) len = 0; 
+			if (len > E.screencols) len = E.screencols; 
+			char *c = &E.row[filerow].render[E.coloff]; 
+			unsigned char *hl = &E.row[filerow].hl[E.coloff]; 
+			int current_color = -1; 
+			int j; 
+			for (j = 0; j < len; j++) {
+				if (hl[j] == HL_NORMAL) {
+					if (current_color != -1) {
+						abAppend(ab, "\x1b[39m", 5); 
+						current_color = -1; 
+					}
+					abAppend(ab, &c[j], 1); 
+				} else {
+					int color = editorSyntaxToColor(hl[j]);
+					if (color != current_color) {
+						current_color = color;  
+						char buf[16]; 
+						int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", color); 
+						abAppend(ab, buf, clen); 
+					}
+					abAppend(ab, &c[j], 1); 
+				}
+			}
+			abAppend(ab, "\x1b[39m", 5); 
+		}
+
+		
+		abAppend(ab, "\x1b[K", 3); 
+		abAppend(ab, "\r\n", 2);
+	}
+}
+```
+
+`current_color` 为 `-1` 表示默认颜色, 否则设置为 `editorSyntaxToColor()` 最后的返回值. 当 `hl` 值变化时, 更改 `current_color`. 
