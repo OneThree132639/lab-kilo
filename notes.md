@@ -4857,3 +4857,147 @@ int main(int argc, char *argv[]) {
 	return 0; 
 }
 ```
+
+### 增量搜索
+
+接下来, 让我们把我们的搜索功能变得更华丽一点. 我们希望编辑器支持增量搜索, 也就是说, 用户在搜索的过程中, 输入的字符不会在按下 `Enter` 键之后消失, 而是支持用户在这次搜索之后继续在原输入上添加或删减字符, 以便搜索更精确的匹配. 
+
+为了实现这个, 我们将为 `editorPrompt()` 函数添加一个回调函数参数, 在每次按键之后调用该函数以传递当前输入字符串和最后一个按键: 
+
+```c
+/*** prototypes ***/
+
+char *editorPrompt(char *prompt, void (*callback)(char *, int)); 
+
+/*** input ***/
+
+char *editorPrompt(char *prompt, void (*callback)(char *, int)) {
+	size_t bufsize = 128; 
+	char *buf = malloc(bufsize); 
+
+	size_t buflen = 0; 
+	buf[0] = '\0'; 
+
+	while (1) {
+		editorSetStatusMessage(prompt, buf); 
+		editorRefreshScreen(); 
+
+		int c = editorReadKey(); 
+		if (c == DEL_KEY || c == CTRL_KEY('h') || c == BACKSPACE) {
+			if (buflen != 0) buf[--buflen] = '\0'; 
+		} else if (c == '\x1b') {
+			editorSetStatusMessage(""); 
+			if (callback) callback(buf, c); 
+			free(buf); 
+			return NULL; 
+		} else if (c == '\r') {
+			if (buflen != 0) {
+				editorSetStatusMessage(""); 
+				if (callback) callback(buf, c); 
+				return buf; 
+			}
+		} else if (!iscntrl(c) && c < 128) {
+			if (buflen == bufsize - 1) {
+				bufsize *= 2; 
+				buf = realloc(buf, bufsize); 
+			}
+			buf[buflen++] = c; 
+			buf[buflen] = '\0'; 
+		}
+
+		if (callback) callback(buf, c); 
+	}
+}
+```
+
+`if` 语句允许在调用 `editorPrompt()` 函数的时候传入 `NULL`, 表示不希望调用回调函数, 这是在获取文件名的时候我们需要的功能. 因此在 `editorSave()` 函数中调用 `editorPrompt()` 函数的时候, 我们传入第 `2` 个参数 `NULL`. 在当前, 我们令 `editorFind()` 函数中调用的 `editorPrompt()` 函数的第 `2` 个参数也为 `NULL`, 使得代码可以正确编译: 
+
+```c
+/*** file i/o ***/
+
+void editorSave(void) {
+	if (E.filename == NULL) {
+		E.filename = editorPrompt("Save as: %s (ESC to cancel)", NULL); 
+		if (E.filename == NULL) {
+			editorSetStatusMessage("Save aborted"); 
+			return; 
+		}
+	} 
+
+	int len; 
+	char *buf = editorRowsToString(&len); 
+
+	int fd = open(E.filename, O_RDWR | O_CREAT, 0644); 
+	if (fd != -1) {
+		if (ftruncate(fd, len) != -1) {
+			if (write(fd, buf, len) == len) {
+				close(fd); 
+				free(buf); 
+				E.dirty = 0; 
+				editorSetStatusMessage("%d bytes written to disk", len); 
+				return; 
+			}
+		}
+		close(fd); 
+	}
+
+	free(buf); 
+	editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno)); 
+}
+
+/*** find ***/
+
+void editorFind(void) {
+	char *query = editorPrompt("Search: %s (ESC to cancel)", NULL); 
+	if (query == NULL) return; 
+
+	int i; 
+	for (i = 0; i < E.numrows; i++) {
+		erow *row = &E.row[i]; 
+		char *match = strstr(row->render, query); 
+		if (match) {
+			E.cy = i; 
+			E.cx = editorRowRxToCx(row, match - row->render); 
+			E.rowoff = E.numrows; 
+			break; 
+		}
+	}
+
+	free(query); 
+}
+```
+
+接下来我们将搜索相关的代码放入新的函数 `editorFindCallback()` 函数中, 这就是我们将传入 `editorPrompt()` 函数的回调函数: 
+
+```c
+/*** find ***/
+
+void editorFindCallback(char *query, int key) {
+	if (key == '\r' || key == '\x1b') {
+		return; 
+	}
+
+	int i; 
+	for (i = 0; i < E.numrows; i++) {
+		erow *row = &E.row[i]; 
+		char *match = strstr(row->render, query); 
+		if (match) {
+			E.cy = i; 
+			E.cx = editorRowRxToCx(row, match - row->render); 
+			E.rowoff = E.numrows; 
+			break; 
+		}
+	}
+}
+
+void editorFind(void) {
+	char *query = editorPrompt("Search: %s (ESC to cancel)", editorFindCallback); 
+
+	if (query) {
+		free(query); 
+	}
+}
+```
+
+在回调函数中, 我们检查用户是否按下了 `Enter` 或 `Escape`, 如果是, 那么立刻返回以退出搜索模式. 否则, 每次按键之后, 都会对当前输入字符串 `query` 进行一次查找. 
+
