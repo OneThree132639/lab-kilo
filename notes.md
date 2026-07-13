@@ -5516,3 +5516,67 @@ void editorFindCallback(char *query, int key) {
 ```
 
 其中 `match - row->render` 是指向匹配开头字符的指针. 
+
+### 在搜索之后恢复语法高亮
+
+当前, 搜索结果在搜索结束之后依旧显示蓝色高亮, 我们希望在搜索结束之后将 `hl` 恢复为搜索之前的值. 为了实现这一目标, 在函数 `editorFindCallback()` 函数中我们将原先的 `hl` 内容存入静态变量 `saved_hl` 中, 并在该函数顶部恢复 `hl` 的值为 `saved_hl`: 
+
+```c
+/*** find ***/
+
+void editorFindCallback(char *query, int key) {
+	static int last_match = -1; 
+	static int direction = 1; 
+
+	static int saved_hl_line; 
+	static char *saved_hl = NULL; 
+
+	if (saved_hl) {
+		memcpy(E.row[saved_hl_line].hl, saved_hl, E.row[saved_hl_line].rsize); 
+		free(saved_hl); 
+		saved_hl = NULL; 
+	}
+
+	if (key == '\r' || key == '\x1b') {
+		last_match = -1; 
+		direction = 1; 
+		return; 
+	} else if (key == ARROW_RIGHT || key == ARROW_DOWN) {
+		direction = 1; 
+	} else if (key == ARROW_LEFT || key == ARROW_UP) {
+		direction = -1; 
+	} else {
+		last_match = -1; 
+		direction = 1; 
+	}
+
+	if (last_match == -1) direction = 1; 
+	int current = last_match; 
+	int i; 
+	for (i = 0; i < E.numrows; i++) {
+		current += direction; 
+		if (current == -1) current = E.numrows - 1; 
+		else if (current == E.numrows) current = 0; 
+
+		erow *row = &E.row[current]; 
+		char *match = strstr(row->render, query); 
+		if (match) {
+			last_match = current; 
+			E.cy = current;  
+			E.cx = editorRowRxToCx(row, match - row->render); 
+			E.rowoff = E.numrows; 
+
+			saved_hl_line = current; 
+			saved_hl = malloc(row->rsize); 
+			memcpy(saved_hl, row->hl, row->rsize); 
+			memset(&row->hl[match - row->render], HL_MATCH, strlen(query)); 
+			break; 
+		}
+	}
+}
+```
+
+我们还利用另一个静态变量 `saved_hl_line` 以记录 `hl` 需要恢复的行的索引. `saved_hl` 是一个动态分配的数组, 当没有需要恢复的行的时候, 其值为 `NULL`. 
+
+由于 `editorFindCallback()` 函数在被调用的时候首先检查 `saved_hl` 是否为空并释放资源, 它保证了不会出现内存泄漏的问题. 
+
