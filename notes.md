@@ -5445,3 +5445,74 @@ void editorDrawRows(struct abuf *ab) {
 ```
 
 `current_color` 为 `-1` 表示默认颜色, 否则设置为 `editorSyntaxToColor()` 最后的返回值. 当 `hl` 值变化时, 更改 `current_color`. 
+
+### 搜索结果着色
+
+在对字符串和关键词等进行语法高亮之前, 让我们首先利用我们刚刚实现的高亮系统完成对搜索结果的着色. 首先, 在 `editorHighlight` 枚举类中添加 `HL_MATCH` 枚举量, 并将其在 `editorSyntaxToColor()` 中的颜色代码设置为 `34`, 即蓝色: 
+
+```c
+/*** defines ***/
+
+enum editorHighlight {
+	HL_NORMAL = 0, 
+	HL_NUMBER, 
+	HL_MATCH
+}; 
+
+/*** syntax highlighting ***/
+
+int editorSyntaxToColor(int hl) {
+	switch (hl) {
+		case HL_NUMBER: return 31; 
+		case HL_MATCH: return 34; 
+		default: return 37; 
+	}
+}
+```
+
+接下来我们需要做的就是将匹配的结果对应的 `hl` 设置为 `HL_MATCH`: 
+
+```c
+/*** find ***/
+
+void editorFindCallback(char *query, int key) {
+	static int last_match = -1; 
+	static int direction = 1; 
+
+	if (key == '\r' || key == '\x1b') {
+		last_match = -1; 
+		direction = 1; 
+		return; 
+	} else if (key == ARROW_RIGHT || key == ARROW_DOWN) {
+		direction = 1; 
+	} else if (key == ARROW_LEFT || key == ARROW_UP) {
+		direction = -1; 
+	} else {
+		last_match = -1; 
+		direction = 1; 
+	}
+
+	if (last_match == -1) direction = 1; 
+	int current = last_match; 
+	int i; 
+	for (i = 0; i < E.numrows; i++) {
+		current += direction; 
+		if (current == -1) current = E.numrows - 1; 
+		else if (current == E.numrows) current = 0; 
+
+		erow *row = &E.row[current]; 
+		char *match = strstr(row->render, query); 
+		if (match) {
+			last_match = current; 
+			E.cy = current;  
+			E.cx = editorRowRxToCx(row, match - row->render); 
+			E.rowoff = E.numrows; 
+
+			memset(&row->hl[match - row->render], HL_MATCH, strlen(query)); 
+			break; 
+		}
+	}
+}
+```
+
+其中 `match - row->render` 是指向匹配开头字符的指针. 
