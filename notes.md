@@ -5001,3 +5001,31 @@ void editorFind(void) {
 
 在回调函数中, 我们检查用户是否按下了 `Enter` 或 `Escape`, 如果是, 那么立刻返回以退出搜索模式. 否则, 每次按键之后, 都会对当前输入字符串 `query` 进行一次查找. 
 
+### 在取消搜索的时候恢复光标位置
+
+当用户使用 `Escape` 退出搜索模式的时候, 我们希望光标回到搜索模式开始之前的位置. 为了实现这个功能, 在搜索模式开始的时候保存当前光标位置和滚动位置, 并在取消搜索模式的时候恢复这些值: 
+
+```c
+/*** find ***/
+
+void editorFind(void) {
+	int saved_cx = E.cx; 
+	int saved_cy = E.cy; 
+	int saved_coloff = E.coloff; 
+	int saved_rowoff = E.rowoff; 
+
+	char *query = editorPrompt("Search: %s (ESC to cancel)", editorFindCallback); 
+
+	if (query) {
+		free(query); 
+	} else {
+		E.cx = saved_cx; 
+		E.cy = saved_cy; 
+		E.coloff = saved_coloff; 
+		E.rowoff = saved_rowoff; 
+	}
+}
+```
+
+`query` 为 `NULL` 代表用户通过按 `Escape` 退出了搜索模式, 此时需要恢复光标位置. 
+
