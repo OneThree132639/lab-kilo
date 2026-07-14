@@ -5687,3 +5687,295 @@ void editorUpdateSyntax(erow *row) {
 
 这样可以把小数点也考虑在内. (经检测没有排除多个 `.` 连接数字的情况)
 
+### 检测文件类型
+
+在我们为其它部分添加高亮之前, 首先先为我们的编辑器添加文件类型检测功能, 这允许我们对不同类型的文件使用不同的高亮规则. 比如, 文本文件不应当使用任何高亮, 而 `C` 文件应当高亮数字、字符串、`C/C++` 风格的注释, 以及 `C` 特定的关键字等. 
+
+首先让我们创建一个 `editorSyntax()` 结构体, 用于保存一个特定的文件类型包含的所有语法高亮信息: 
+
+```c
+/*** defines ***/
+
+#define HL_HIGHLIGHT_NUMBERS (1<<0)
+
+/*** data ***/
+
+struct editorSyntax {
+	char *filetype; 
+	char **filematch; 
+	int flags; 
+}; 
+```
+
+`filetype` 是将在状态条中显示的文件类型的名称. `filematch` 是字符串的数组, 每一个字符串将会与文件名进行比对, 匹配成功就说明该文件属于此文件类型. `flags` 是一个位字段, 用于保存是否启用数字高亮、是否启用字符串高亮等的标志. 当前, 我们只定义了 `HL_HIGHLIGHT_NUMBERS` 标志位. 
+
+接下来让我们创建一个内置的 `editorSyntax` 数组, 并将 `C` 文件类型添加进其中: 
+
+```c
+/*** filetypes ***/
+
+char *C_HL_extensions[] = { ".c", ".h", ".cpp", NULL }; 
+
+struct editorSyntax HLDB[] = {
+	{
+		"c", 
+		C_HL_extensions, 
+		HL_HIGHLIGHT_NUMBERS
+	}, 
+}; 
+
+#define HLDB_ENTRIES (sizeof(HLDB) / sizeof(HLDB[0]))
+```
+
+`HLDB` 指 `highlight database`. 我们的 `C` 语言对应的 `editorSyntax` 结构体包括 `filetype` 字段的 `"c"`, `filematch` 字段的扩展名 `".c"`, `".h"` 和 `".cpp"`, 注意该数组必须以 `NULL` 结尾, 以便动态确定数组(类比字符串使用 `\0` 结尾). 在 `flags` 字段, `HL_HIGHLIGHT_NUMBERS` 标志位启用. 
+
+`HLDB_ENTRIES` 用于保存 `HLDB` 数组中的元素个数. 
+
+接下来让我们在全局状态中添加一个指向 `editorSyntax` 结构体类型的指针并将其初始化为 `NULL`: 
+
+```c
+/*** data ***/
+
+struct editorConfig {
+	int cx, cy; 
+	int rx; 
+	int rowoff; 
+	int coloff;
+	int screenrows; 
+	int screencols; 
+	int numrows; 
+	erow *row; 
+	int dirty; 
+	char *filename; 
+	char statusmsg[80]; 
+	time_t statusmsg_time; 
+	struct editorSyntax *syntax; 
+	struct termios orig_termios; 
+}; 
+
+/*** init ***/
+
+void initEditor(void) {
+	E.cx = 0; 
+	E.cy = 0; 
+	E.rx = 0; 
+	E.rowoff = 0; 
+	E.coloff = 0; 
+	E.numrows = 0; 
+	E.row = NULL; 
+	E.dirty = 0; 
+	E.filename = NULL; 
+	E.statusmsg[0] = '\0'; 
+	E.statusmsg_time = 0; 
+	E.syntax = NULL; 
+
+	if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
+		die("getWindowSize"); 
+	}
+	E.screenrows -= 2; 
+}
+```
+
+当 `E.syntax` 为 `NULL` 时, 表示没有符合当前文件的文件类型, 因此也不实现任何语法高亮. 
+
+接下来让我们在状态条中显示当前文件类型, 如果 `E.syntax` 为 `NULL`, 则显示 `no ft`(意为 `no filetype`): 
+
+```c
+void editorDrawStatusBar(struct abuf *ab) {
+	abAppend(ab, "\x1b[7m", 4); 
+	char status[80], rstatus[80];
+	int len = snprintf(
+		status, sizeof(status), "%.20s - %d lines %s", 
+		E.filename ? E.filename : "[No Name]", E.numrows, 
+		E.dirty ? "(modified)" : ""
+	); 
+	int rlen = snprintf(
+		rstatus, sizeof(rstatus), "%s | %d/%d", 
+		E.syntax ? E.syntax->filetype : "no ft", E.cy + 1, E.numrows
+	); 
+	if (len > E.screencols) len = E.screencols; 
+	abAppend(ab, status, len); 
+	while (len < E.screencols) {
+		if (E.screencols - len == rlen) {
+			abAppend(ab, rstatus, rlen); 
+			break; 
+		} else {
+			abAppend(ab, " ", 1); 
+			len++; 
+		}
+	}
+	abAppend(ab, "\x1b[m", 3); 
+	abAppend(ab, "\r\n", 2); 
+}
+```
+
+加下来让我们修改 `editorUpdateSyntax()` 函数, 将 `E.syntax` 的值纳入高亮判断中: 
+
+```c
+/*** syntax highlighting ***/
+
+void editorUpdateSyntax(erow *row) {
+	row->hl = realloc(row->hl, row->rsize); 
+	memset(row->hl, HL_NORMAL, row->rsize); 
+
+	if (E.syntax == NULL) return; 
+
+	int prev_sep = 1; 
+
+	int i = 0; 
+	while (i < row->size) {
+		char c = row->render[i]; 
+		unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL; 
+
+		if (E.syntax->flags & HL_HIGHLIGHT_NUMBERS) {
+			if ((isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) || (c == '.' && prev_hl == HL_NUMBER)) {
+				row->hl[i] = HL_NUMBER; 
+				i++; 
+				prev_sep = 0; 
+				continue; 
+			}
+		}
+
+		prev_sep = is_seperator(c); 
+		i++; 
+	}
+}
+```
+
+如果没有设置文件类型, 那么在将一整行设置为 `HL_NORMAL` 之后立刻返回. 如果标志位启用了数字高亮, 则进入分支执行数字高亮操作. 
+
+接下来让我们创建 `editorSelectSyntaxHighlight()` 函数, 用于匹配当前的文件名和 `HDLB` 中的其中一个 `HLDB` 字段, 如果发现一个匹配, 则将 `E.syntax` 设置为对应的文件类型: 
+
+```c
+/*** syntax highlighting ***/
+
+void editorSelectSyntaxHighlight(void) {
+	E.syntax = NULL; 
+	if (E.filename == NULL) return; 
+
+	char *ext = strrchr(E.filename, '.'); 
+
+	for (unsigned int j = 0; j < HLDB_ENTRIES; j++) {
+		struct editorSyntax *s = &HLDB[j]; 
+		unsigned int i = 0; 
+		while (s->filematch[i]) {
+			int is_ext = (s->filematch[i][0] == '.'); 
+			if (
+				(is_ext && ext && !strcmp(ext, s->filematch[i])) ||
+				(!is_ext && strstr(E.filename, s->filematch[i]))
+			) {
+				E.syntax = s; 
+				return; 
+			}
+			i++; 
+		}
+	}
+}
+```
+
+ - `char *strrchr(const char *s, int c)`: 来自 `<string.h>`. 寻找 `s` 指向的字符串(包括末尾的 `\0`)中出现在最后的字符 `c`, 返回指向 `c` 的指针, 若未找到, 返回空指针. 
+ - `int strcmp(const char *s1, const char *s2)`: 来自 `<string.h>`. 比较两个字符串的大小(转换为 `unsigned char`), 两个字符串相同时, 返回 `0`, 不同时, 返回两个字符串中第一组不同字符之间的差. 
+
+首先将 `E.syntax` 设置为 `NULL`, 以确保当没有成功匹配或者没有文件名的时候, 没有文件类型. 
+
+接下来通过 `strrchr()` 函数获取指向文件名中的扩展名部分的指针 `ext`, 如果文件没有扩展名, 则 `ext` 为 `NULL`. 
+
+接下来, 对 `HLDB` 数组中的每一个 `editorSyntax` 对象, 遍历其 `filematch` 数组, 若满足: 匹配字符串为扩展名, 文件名中存在扩展名, 扩展名与匹配字符串匹配, 或者匹配字符串不是扩展名且整个文件名与匹配字符串匹配, 则认为匹配成功, 将 `E.syntax` 设置为当前的 `editorSyntax` 结构体并返回. 
+
+我们希望在所有 `E.filename` 发生变化的时候调用 `editorSelectSyntaxHighlight()` 函数, 这包括 `editorOpen()` 函数和 `editorSave()` 函数: 
+
+```c
+/*** file i/o ***/
+
+void editorOpen(char *filename) {
+	free(E.filename); 
+	E.filename = strdup(filename); 
+
+	editorSelectSyntaxHighlight(); 
+
+	FILE *fp = fopen(filename, "r"); 
+	if (!fp) die("fopen"); 
+
+	char *line = NULL; 
+	size_t linecap = 0; 
+	ssize_t linelen; 
+	while ((linelen = getline(&line, &linecap, fp)) != -1) {
+		while (linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r')) {
+			linelen--; 
+		}
+		editorInsertRow(E.numrows, line, linelen); 
+	}
+
+	free(line); 
+	fclose(fp); 
+	E.dirty = 0; 
+}
+
+void editorSave(void) {
+	if (E.filename == NULL) {
+		E.filename = editorPrompt("Save as: %s (ESC to cancel)", NULL); 
+		if (E.filename == NULL) {
+			editorSetStatusMessage("Save aborted"); 
+			return; 
+		}
+		editorSelectSyntaxHighlight(); 
+	} 
+
+	int len; 
+	char *buf = editorRowsToString(&len); 
+
+	int fd = open(E.filename, O_RDWR | O_CREAT, 0644); 
+	if (fd != -1) {
+		if (ftruncate(fd, len) != -1) {
+			if (write(fd, buf, len) == len) {
+				close(fd); 
+				free(buf); 
+				E.dirty = 0; 
+				editorSetStatusMessage("%d bytes written to disk", len); 
+				return; 
+			}
+		}
+		close(fd); 
+	}
+
+	free(buf); 
+	editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno)); 
+}
+```
+
+当前, 如果你打开一个 `C` 文件, 你可以看到数字已经被高亮, 并看到在状态栏中显示的文件类型 `c`. 如果你在启动编辑器的时候没有输入参数, 并在其中保存为一个以 `.c` 结尾的文件, 你可以看到文件类型从 `no ft` 变为 `c`, 这与我们的预期相符. 然而, 文件中的数字没有被高亮. 因此, 我们需要在 `editorSelectSyntaxHighlight()` 函数中设置 `E.syntax` 之后重新高亮整个文件: 
+
+```c
+/*** syntax highlighting ***/
+
+void editorSelectSyntaxHighlight(void) {
+	E.syntax = NULL; 
+	if (E.filename == NULL) return; 
+
+	char *ext = strrchr(E.filename, '.'); 
+
+	for (unsigned int j = 0; j < HLDB_ENTRIES; j++) {
+		struct editorSyntax *s = &HLDB[j]; 
+		unsigned int i = 0; 
+		while (s->filematch[i]) {
+			int is_ext = (s->filematch[i][0] == '.'); 
+			if (
+				(is_ext && ext && !strcmp(ext, s->filematch[i])) ||
+				(!is_ext && strstr(E.filename, s->filematch[i]))
+			) {
+				E.syntax = s; 
+
+				int filerow; 
+				for (filerow = 0; filerow < E.numrows; filerow++) {
+					editorUpdateSyntax(&E.row[filerow]); 
+				}
+
+				return; 
+			}
+			i++; 
+		}
+	}
+}
+```
+
+现在在文件类型改变之后, 文本的高亮也会立刻改变了. 
