@@ -5979,3 +5979,171 @@ void editorSelectSyntaxHighlight(void) {
 ```
 
 现在在文件类型改变之后, 文本的高亮也会立刻改变了. 
+
+### 字符串着色
+
+在完成上述的工作之后, 我们可以为更多的东西实现高亮. 让我们从字符串开始: 
+
+```c
+/*** defines ***/
+
+enum editorHighlight {
+	HL_NORMAL = 0, 
+	HL_STRING, 
+	HL_NUMBER, 
+	HL_MATCH
+}; 
+
+/*** syntax highlighting ***/
+
+int editorSyntaxToColor(int hl) {
+	switch (hl) {
+		case HL_STRING: return 35; 
+		case HL_NUMBER: return 31; 
+		case HL_MATCH: return 34; 
+		default: return 37; 
+	}
+}
+```
+
+我们将把字符串绘制为品红色 `35`. 
+
+接下来将标志位 `HL_HIGHLIGHT_STRINGS` 添加到 `editorSyntax` 结构体的 `field` 字段中, 并启用 `C` 类型文件的该标志位: 
+
+```c
+/*** defines ***/
+
+#define HL_HIGHLIGHT_STRINGS (1<<1)
+
+/*** filetypes ***/
+
+struct editorSyntax HLDB[] = {
+	{
+		"c", 
+		C_HL_extensions, 
+		HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS
+	}, 
+}; 
+```
+
+接下来我们来实现真正执行高亮部分的代码, 我们将使用 `in_string` 变量来记录当前是否处于字符串中, 如果是, 我们将一直高亮当前代码直至遇上结束引号: 
+
+```c
+/*** syntax highlighting ***/
+
+void editorUpdateSyntax(erow *row) {
+	row->hl = realloc(row->hl, row->rsize); 
+	memset(row->hl, HL_NORMAL, row->rsize); 
+
+	if (E.syntax == NULL) return; 
+
+	int prev_sep = 1; 
+	int in_string = 0; 
+
+	int i = 0; 
+	while (i < row->size) {
+		char c = row->render[i]; 
+		unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL; 
+
+		if (E.syntax->flags & HL_HIGHLIGHT_STRINGS) {
+			if (in_string) {
+				row->hl[i] = HL_STRING; 
+				if (c == in_string) in_string = 0; 
+				i++; 
+				prev_sep = 1; 
+				continue; 
+			} else {
+				if (c == '\"' || c == '\'') {
+					in_string = c; 
+					row->hl[i] = HL_STRING; 
+					i++; 
+					continue; 
+				}
+			}
+		}
+
+		if (E.syntax->flags & HL_HIGHLIGHT_NUMBERS) {
+			if (
+				(isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) || 
+				(c == '.' && prev_hl == HL_NUMBER)
+			) {
+				row->hl[i] = HL_NUMBER; 
+				i++; 
+				prev_sep = 0; 
+				continue; 
+			}
+		}
+
+		prev_sep = is_seperator(c); 
+		i++; 
+	}
+}
+```
+
+我们将用单引号 `'` 和用双引号 `"` 的字符串均进行高亮, 当碰到一个单引号或者双引号的时候, 我们将其存储至 `in_string` 中, 因此, 如果再一次检测到 `in_string` 字符, 说明字符串结束. 
+
+如果 `in_string` 不为 `0`, 则当前仍然在字符串内部, 将当前字符的 `hl` 设置为 `HL_STRING`, 检查当前字符是否为 `in_string`, 如果是, 重置 `in_string` 为 `0`, 当前字符穿结束, 设置 `prev_sep` 为 `1`, 因为结束引号可以看作分隔字符, 最后, 由于当前字符处理完毕, 将索引自增之后 `continue` 进入下一轮迭代. 
+
+如果 `in_string` 为 `0`, 且当前字符是引号, 那么将当前字符保存为 `in_string`, 将其 `hl` 设置为 `HL_STRING`, 索引自增之后 `continue` 进入下一轮迭代. 
+
+我们当前没有考虑字符串中出现转义字符的情况, 如果在字符串中出现了转义字符 `\'` 和 `\"`, 在大多数语言中不会结束字符串: 
+
+```c
+/*** syntax highlighting ***/
+
+void editorUpdateSyntax(erow *row) {
+	row->hl = realloc(row->hl, row->rsize); 
+	memset(row->hl, HL_NORMAL, row->rsize); 
+
+	if (E.syntax == NULL) return; 
+
+	int prev_sep = 1; 
+	int in_string = 0; 
+
+	int i = 0; 
+	while (i < row->size) {
+		char c = row->render[i]; 
+		unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL; 
+
+		if (E.syntax->flags & HL_HIGHLIGHT_STRINGS) {
+			if (in_string) {
+				row->hl[i] = HL_STRING; 
+				if (c == '\\' && i + 1 < row->size) {
+					row->hl[i + 1] = HL_STRING; 
+					i += 2; 
+					continue; 
+				}
+				if (c == in_string) in_string = 0; 
+				i++; 
+				prev_sep = 1; 
+				continue; 
+			} else {
+				if (c == '\"' || c == '\'') {
+					in_string = c; 
+					row->hl[i] = HL_STRING; 
+					i++; 
+					continue; 
+				}
+			}
+		}
+
+		if (E.syntax->flags & HL_HIGHLIGHT_NUMBERS) {
+			if (
+				(isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) || 
+				(c == '.' && prev_hl == HL_NUMBER)
+			) {
+				row->hl[i] = HL_NUMBER; 
+				i++; 
+				prev_sep = 0; 
+				continue; 
+			}
+		}
+
+		prev_sep = is_seperator(c); 
+		i++; 
+	}
+}
+```
+
+在碰到反斜杠 `\` 且其后还存在字符的时候, 我们同事高亮反斜杠和它之后的 `1` 个字符, 将索引增加 `2` 之后进入下一轮迭代. 
+
