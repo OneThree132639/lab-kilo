@@ -6274,3 +6274,167 @@ void editorUpdateSyntax(erow *row) {
 
 如果你不希望在某个类型的文件中启用单行注释高亮, 可以令 `singleline_comment_start` 字段为 `NULL` 或空字符串 `""`. 在确认 `scs` 是有意义的开头并且当前不处于字符串之中之后, 检查当前位置是否为注释开头, 如果是, 则将所有位于次之后的字符对应的 `hl` 设为 `HL_COMMENT`, 并退出当前行的循环. 
 
+### 关键字着色
+
+接下来让我们高亮关键字. 我们将允许每个语言特定两类着不同颜色的关键字(在 `C` 中, 这两类分别为关键字和通用类型名称). 
+
+```c
+/*** defines ***/
+
+enum editorHighlight {
+	HL_NORMAL = 0, 
+	HL_COMMENT, 
+	HL_KEYWORD1, 
+	HL_KEYWORD2, 
+	HL_STRING, 
+	HL_NUMBER, 
+	HL_MATCH
+}; 
+
+/*** syntax highlighting ***/
+
+int editorSyntaxToColor(int hl) {
+	switch (hl) {
+		case HL_COMMENT: return 36; 
+		case HL_KEYWORD1: return 33; 
+		case HL_KEYWORD2: return 32; 
+		case HL_STRING: return 35; 
+		case HL_NUMBER: return 31; 
+		case HL_MATCH: return 34; 
+		default: return 37; 
+	}
+}
+```
+
+两种关键字分别使用黄色 `33` 和绿色 `32` 进行高亮. 
+
+接下来, 让我们在 `editorSyntax` 结构体中添加字符串数组 `keywords` 字段, 它以 `NULL` 结尾, 每个字符串包含一个关键字. 为了区分两类关键字, 我们将在第二种关键字的末尾添加 `|` 字符. 
+
+```c
+/*** data ***/
+
+struct editorSyntax {
+	char *filetype; 
+	char **filematch; 
+	char **keywords; 
+	char *singleline_comment_start; 
+	int flags; 
+}; 
+
+/*** filetypes ***/
+
+char *C_HL_keywords[] = {
+	"switch", "if", "while", "for", "break", "continue", "return", 
+	"else", "struct", "union", "typedef", "static", "enum", "class", 
+	"case", 
+
+	"int|", "long|", "double|", "float|", "char|", "unsigned|", 
+	"signed|", "void|", NULL
+}; 
+
+struct editorSyntax HLDB[] = {
+	{
+		"c", 
+		C_HL_extensions, 
+		C_HL_keywords, 
+		"//", 
+		HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS
+	}, 
+}; 
+```
+
+接下来实现为他们加上高亮的代码: 
+
+```c
+/*** syntax highlighting ***/
+
+void editorUpdateSyntax(erow *row) {
+	row->hl = realloc(row->hl, row->rsize); 
+	memset(row->hl, HL_NORMAL, row->rsize); 
+
+	if (E.syntax == NULL) return; 
+
+	char **keywords = E.syntax->keywords; 
+
+	char *scs = E.syntax->singleline_comment_start; 
+	int scs_len = scs ? strlen(scs) : 0; 
+
+	int prev_sep = 1; 
+	int in_string = 0; 
+
+	int i = 0; 
+	while (i < row->rsize) {
+		char c = row->render[i]; 
+		unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL; 
+
+		if (scs_len && !in_string) {
+			if (!strncmp(&row->render[i], scs, scs_len)) {
+				memset(&row->hl[i], HL_COMMENT, row->rsize - i); 
+				break; 
+			}
+		}
+
+		if (E.syntax->flags & HL_HIGHLIGHT_STRINGS) {
+			if (in_string) {
+				row->hl[i] = HL_STRING; 
+				if (c == '\\' && i + 1 < row->size) {
+					row->hl[i + 1] = HL_STRING; 
+					i += 2; 
+					continue; 
+				}
+				if (c == in_string) in_string = 0; 
+				i++; 
+				prev_sep = 1; 
+				continue; 
+			} else {
+				if (c == '\"' || c == '\'') {
+					in_string = c; 
+					row->hl[i] = HL_STRING; 
+					i++; 
+					continue; 
+				}
+			}
+		}
+
+		if (E.syntax->flags & HL_HIGHLIGHT_NUMBERS) {
+			if (
+				(isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) || 
+				(c == '.' && prev_hl == HL_NUMBER)
+			) {
+				row->hl[i] = HL_NUMBER; 
+				i++; 
+				prev_sep = 0; 
+				continue; 
+			}
+		}
+
+		if (prev_sep) {
+			int j; 
+			for (j = 0; keywords[j]; j++) {
+				int klen = strlen(keywords[j]); 
+				int kw2 = keywords[j][klen - 1] == '|'; 
+				if (kw2) klen--; 
+
+				if (
+					!strncmp(&row->render[i], keywords[j], klen) && 
+					is_seperator(row->render[i + klen])
+				) {
+					memset(&row->hl[i], kw2 ? HL_KEYWORD2 : HL_KEYWORD1, klen); 
+					i += klen; 
+					break; 
+				}
+			}
+			if (keywords[j] != NULL) {
+				prev_sep = 0; 
+				continue; 
+			}
+		}
+
+		prev_sep = is_seperator(c); 
+		i++; 
+	}
+}
+```
+
+关键字要求其之前和之后均为分隔字符, 对每一个关键字可能, 将关键字长度存储在 `klen` 中, 使用 `strncmp()` 函数判断当前位置是否存在关键字, 将其高亮, 并将 `i` 增加 `klen`, 跳出关键字循环. 通过判断当前关键字是否为空已确认是否跳出循环, 如果是提前跳出循环的, 说明检测到关键字, 因此将 `prev_sep` 设为 `0` 并 `continue`. 
+
