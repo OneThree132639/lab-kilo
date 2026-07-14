@@ -5592,7 +5592,7 @@ void editorUpdateSyntax(erow *row) {
 	memset(row->hl, HL_NORMAL, row->rsize); 
 
 	int i = 0; 
-	while (i < row->size) {
+	while (i < row->rsize) {
 		char c = row->render[i]; 
 
 		if (isdigit(c)) {
@@ -5631,7 +5631,7 @@ void editorUpdateSyntax(erow *row) {
 	int prev_sep = 1; 
 
 	int i = 0; 
-	while (i < row->size) {
+	while (i < row->rsize) {
 		char c = row->render[i]; 
 		unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL; 
 
@@ -5668,7 +5668,7 @@ void editorUpdateSyntax(erow *row) {
 	int prev_sep = 1; 
 
 	int i = 0; 
-	while (i < row->size) {
+	while (i < row->rsize) {
 		char c = row->render[i]; 
 		unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL; 
 
@@ -5823,7 +5823,7 @@ void editorUpdateSyntax(erow *row) {
 	int prev_sep = 1; 
 
 	int i = 0; 
-	while (i < row->size) {
+	while (i < row->rsize) {
 		char c = row->render[i]; 
 		unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL; 
 
@@ -6041,7 +6041,7 @@ void editorUpdateSyntax(erow *row) {
 	int in_string = 0; 
 
 	int i = 0; 
-	while (i < row->size) {
+	while (i < row->rsize) {
 		char c = row->render[i]; 
 		unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL; 
 
@@ -6101,7 +6101,7 @@ void editorUpdateSyntax(erow *row) {
 	int in_string = 0; 
 
 	int i = 0; 
-	while (i < row->size) {
+	while (i < row->rsize) {
 		char c = row->render[i]; 
 		unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL; 
 
@@ -6146,4 +6146,131 @@ void editorUpdateSyntax(erow *row) {
 ```
 
 在碰到反斜杠 `\` 且其后还存在字符的时候, 我们同事高亮反斜杠和它之后的 `1` 个字符, 将索引增加 `2` 之后进入下一轮迭代. 
+
+## 单行注释着色
+
+接下来让我们实现高亮单行注释(多行注释需要在之后实现, 因为其比较复杂): 
+
+```c
+/*** defines ***/
+
+enum editorHighlight {
+	HL_NORMAL = 0, 
+	HL_COMMENT, 
+	HL_STRING, 
+	HL_NUMBER, 
+	HL_MATCH
+}; 
+
+/*** syntax highlighting ***/
+
+int editorSyntaxToColor(int hl) {
+	switch (hl) {
+		case HL_COMMENT: return 36; 
+		case HL_STRING: return 35; 
+		case HL_NUMBER: return 31; 
+		case HL_MATCH: return 34; 
+		default: return 37; 
+	}
+}
+```
+
+注释将被高亮为青色 `36`. 
+
+我们将令每个语言决定自己的单行注释模式, 因为不同语言中的注释模式可能不同, 我们将 `singleline_comment_start` 字段添加至 `editorSyntax` 结构体中, 并在 `C` 类型中将其设置为 `"//"`: 
+
+```c
+/*** data ***/
+
+struct editorSyntax {
+	char *filetype; 
+	char **filematch; 
+	char *singleline_comment_start; 
+	int flags; 
+}; 
+
+/*** filetypes ***/
+
+struct editorSyntax HLDB[] = {
+	{
+		"c", 
+		C_HL_extensions, 
+		"//", 
+		HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS
+	}, 
+}; 
+```
+
+接下来实现高光代码: 
+
+```c
+/*** syntax highlighting ***/
+
+void editorUpdateSyntax(erow *row) {
+	row->hl = realloc(row->hl, row->rsize); 
+	memset(row->hl, HL_NORMAL, row->rsize); 
+
+	if (E.syntax == NULL) return; 
+
+	char *scs = E.syntax->singleline_comment_start; 
+	int scs_len = scs ? strlen(scs) : 0; 
+
+	int prev_sep = 1; 
+	int in_string = 0; 
+
+	int i = 0; 
+	while (i < row->rsize) {
+		char c = row->render[i]; 
+		unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL; 
+
+		if (scs_len && !in_string) {
+			if (!strncmp(&row->render[i], scs, scs_len)) {
+				memset(&row->hl[i], HL_COMMENT, row->rsize - i); 
+				break; 
+			}
+		}
+
+		if (E.syntax->flags & HL_HIGHLIGHT_STRINGS) {
+			if (in_string) {
+				row->hl[i] = HL_STRING; 
+				if (c == '\\' && i + 1 < row->size) {
+					row->hl[i + 1] = HL_STRING; 
+					i += 2; 
+					continue; 
+				}
+				if (c == in_string) in_string = 0; 
+				i++; 
+				prev_sep = 1; 
+				continue; 
+			} else {
+				if (c == '\"' || c == '\'') {
+					in_string = c; 
+					row->hl[i] = HL_STRING; 
+					i++; 
+					continue; 
+				}
+			}
+		}
+
+		if (E.syntax->flags & HL_HIGHLIGHT_NUMBERS) {
+			if (
+				(isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) || 
+				(c == '.' && prev_hl == HL_NUMBER)
+			) {
+				row->hl[i] = HL_NUMBER; 
+				i++; 
+				prev_sep = 0; 
+				continue; 
+			}
+		}
+
+		prev_sep = is_seperator(c); 
+		i++; 
+	}
+}
+```
+
+ - `int strncmp(const char *s1, const char *s2, size_t n)`: 来自 `<string.h>`. 比较 `s1` 和 `s2` 指向的字符串的前 `n` 个比特. 
+
+如果你不希望在某个类型的文件中启用单行注释高亮, 可以令 `singleline_comment_start` 字段为 `NULL` 或空字符串 `""`. 在确认 `scs` 是有意义的开头并且当前不处于字符串之中之后, 检查当前位置是否为注释开头, 如果是, 则将所有位于次之后的字符对应的 `hl` 设为 `HL_COMMENT`, 并退出当前行的循环. 
 
