@@ -6438,3 +6438,147 @@ void editorUpdateSyntax(erow *row) {
 
 关键字要求其之前和之后均为分隔字符, 对每一个关键字可能, 将关键字长度存储在 `klen` 中, 使用 `strncmp()` 函数判断当前位置是否存在关键字, 将其高亮, 并将 `i` 增加 `klen`, 跳出关键字循环. 通过判断当前关键字是否为空已确认是否跳出循环, 如果是提前跳出循环的, 说明检测到关键字, 因此将 `prev_sep` 设为 `0` 并 `continue`. 
 
+### 不可打印字符
+
+在进入处理多行注释高亮之前, 让我们暂时先不考虑语法高亮, 转而考虑另一个问题: 更好地显示不可打印字符. 当前, 如果你使用 `kilo` 打开它本身, 即可执行文件, 并通过方向键四处移动光标, 你会发现你的终端叮当作响(或者闪烁), 这是因为可听提示字符 `7` 被打印了出来. 在我们的代码中包含终端转义序列的字符串会被原模原样地打印出来. 
+
+为了避免上述问题, 我们将把不可打印字符翻译为可打印字符. 我们将字母控制字符 `Ctrl-A`(`1`), `Ctrl-B`(`2`), ..., `Ctrl-Z`(`26`)渲染为对应的大写字母 `A`, `B`, ..., `Z`. 将 `Ctrl-@`(`0`) 渲染为 `@`, 将其它不可打印字符渲染为 `?`. 为了将这些字符与它们对应的可打印字符做出区分, 我们将它们渲染为反转色: 
+
+```c
+/*** output ***/
+
+void editorDrawRows(struct abuf *ab) {
+	int y; 
+	for (y = 0; y < E.screenrows; y++) {
+		int filerow = y + E.rowoff; 
+		if (filerow >= E.numrows) {
+			if (E.numrows == 0 && y == E.screenrows / 3) {
+				char welcome[80]; 
+				int welcomelen = snprintf(welcome, sizeof(welcome), "Kilo editor -- version %s", KILO_VERSION); 
+				if (welcomelen > E.screencols) welcomelen = E.screencols; 
+				int padding = (E.screencols - welcomelen) / 2; 
+				if (padding) {
+					abAppend(ab, "~", 1); 
+					padding--; 
+				}
+				while (padding--) abAppend(ab, " ", 1); 
+				abAppend(ab, welcome, welcomelen); 
+			} else {
+				abAppend(ab, "~", 1);
+			}
+		} else {
+			int len = E.row[filerow].rsize - E.coloff; 
+			if (len < 0) len = 0; 
+			if (len > E.screencols) len = E.screencols; 
+			char *c = &E.row[filerow].render[E.coloff]; 
+			unsigned char *hl = &E.row[filerow].hl[E.coloff]; 
+			int current_color = -1; 
+			int j; 
+			for (j = 0; j < len; j++) {
+				if (iscntrl(c[j])) {
+					char sym = (c[j] <= 26) ? '@' + c[j] : '?'; 
+					abAppend(ab, "\x1b[7m", 4); 
+					abAppend(ab, &sym, 1); 
+					abAppend(ab, "\x1b[m", 3); 
+				} else if (hl[j] == HL_NORMAL) {
+					if (current_color != -1) {
+						abAppend(ab, "\x1b[39m", 5); 
+						current_color = -1; 
+					}
+					abAppend(ab, &c[j], 1); 
+				} else {
+					int color = editorSyntaxToColor(hl[j]);
+					if (color != current_color) {
+						current_color = color;  
+						char buf[16]; 
+						int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", color); 
+						abAppend(ab, buf, clen); 
+					}
+					abAppend(ab, &c[j], 1); 
+				}
+			}
+			abAppend(ab, "\x1b[39m", 5); 
+		}
+
+		
+		abAppend(ab, "\x1b[K", 3); 
+		abAppend(ab, "\r\n", 2);
+	}
+}
+```
+
+使用 `iscntrl()` 函数判断当前字符是否为控制字符, 如果是, 将其转换为对应的可打印字符或者使用 `?`. 
+
+同样的, 使用转义序列控制字符的反转色. 
+
+需要注意的是, `\x1b[m` 会关闭所有的文本格式, 包括颜色, 因此在打印完不可打印字符之后需要重新设置颜色: 
+
+```c
+/*** output ***/
+
+void editorDrawRows(struct abuf *ab) {
+	int y; 
+	for (y = 0; y < E.screenrows; y++) {
+		int filerow = y + E.rowoff; 
+		if (filerow >= E.numrows) {
+			if (E.numrows == 0 && y == E.screenrows / 3) {
+				char welcome[80]; 
+				int welcomelen = snprintf(welcome, sizeof(welcome), "Kilo editor -- version %s", KILO_VERSION); 
+				if (welcomelen > E.screencols) welcomelen = E.screencols; 
+				int padding = (E.screencols - welcomelen) / 2; 
+				if (padding) {
+					abAppend(ab, "~", 1); 
+					padding--; 
+				}
+				while (padding--) abAppend(ab, " ", 1); 
+				abAppend(ab, welcome, welcomelen); 
+			} else {
+				abAppend(ab, "~", 1);
+			}
+		} else {
+			int len = E.row[filerow].rsize - E.coloff; 
+			if (len < 0) len = 0; 
+			if (len > E.screencols) len = E.screencols; 
+			char *c = &E.row[filerow].render[E.coloff]; 
+			unsigned char *hl = &E.row[filerow].hl[E.coloff]; 
+			int current_color = -1; 
+			int j; 
+			for (j = 0; j < len; j++) {
+				if (iscntrl(c[j])) {
+					char sym = (c[j] <= 26) ? '@' + c[j] : '?'; 
+					abAppend(ab, "\x1b[7m", 4); 
+					abAppend(ab, &sym, 1); 
+					abAppend(ab, "\x1b[m", 3); 
+					if (current_color != -1) {
+						char buf[16]; 
+						int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", current_color); 
+						abAppend(ab, buf, clen); 
+					}
+				} else if (hl[j] == HL_NORMAL) {
+					if (current_color != -1) {
+						abAppend(ab, "\x1b[39m", 5); 
+						current_color = -1; 
+					}
+					abAppend(ab, &c[j], 1); 
+				} else {
+					int color = editorSyntaxToColor(hl[j]);
+					if (color != current_color) {
+						current_color = color;  
+						char buf[16]; 
+						int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", color); 
+						abAppend(ab, buf, clen); 
+					}
+					abAppend(ab, &c[j], 1); 
+				}
+			}
+			abAppend(ab, "\x1b[39m", 5); 
+		}
+
+		
+		abAppend(ab, "\x1b[K", 3); 
+		abAppend(ab, "\r\n", 2);
+	}
+}
+```
+
+你可以通过按 `Ctrl-A` 等按键在字符串或者注释中添加不可打印字符, 观察它们是否具有正确的表示. 
