@@ -7203,3 +7203,85 @@ void editorUpdateSyntax(erow *row) {
 
 ## 扩展功能
 
+### 光标列数保持
+
+当前当使用上下方向键切换行的时候, 如果遇到列数较少的行, 光标的坐标会移动到零, 之后一直位于零. 我们希望当跨过列数较少的行回到列数较多的行的时候, 光标的行坐标也能恢复. 
+
+```c
+/*** data ***/
+
+struct editorConfig {
+	int cx, cy; 
+	int rx;
+	int lastrx;  
+	int rowoff; 
+	int coloff;
+	int screenrows; 
+	int screencols; 
+	int numrows; 
+	erow *row; 
+	int dirty; 
+	char *filename; 
+	char statusmsg[80]; 
+	time_t statusmsg_time; 
+	struct editorSyntax *syntax; 
+	struct termios orig_termios; 
+}; 
+
+/*** general functions ***/
+
+static inline int min_int(int a, int b) {
+	return a < b ? a : b; 
+}
+
+/*** input ***/
+
+void editorMoveCursor(int key) {
+	erow *row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy]; 
+
+	switch (key) {
+		case ARROW_LEFT: 
+			if (E.cx != 0) {
+				E.cx--; 
+			} else if (E.cy > 0) {
+				E.cy--; 
+				E.cx = E.row[E.cy].size; 
+			}
+			row = &E.row[E.cy]; 
+			E.lastrx = editorRowCxToRx(row, E.cx); 
+			break;
+		case ARROW_RIGHT: 
+			if (row && E.cx < row->size) {
+				E.cx++; 
+			} else if (row && E.cx == row->size) {
+				E.cy++; 
+				E.cx = 0; 
+			}
+			row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy]; 
+			if (row) {
+				E.lastrx = editorRowCxToRx(row, E.cx);
+			} else {
+				E.lastrx = 0; 
+			} 
+			break;
+		case ARROW_UP: 
+			if (E.cy != 0) {
+				E.cy--; 
+			}
+			break;
+		case ARROW_DOWN: 
+			if (E.cy < E.numrows) {
+				E.cy++; 
+			}
+			break;
+	}
+
+	row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy]; 
+	if (row) {
+		E.cx = min_int(row->size, editorRowRxToCx(row, E.lastrx)); 
+	} else {
+		E.cx = 0; 
+	}
+}
+```
+
