@@ -6582,3 +6582,624 @@ void editorDrawRows(struct abuf *ab) {
 ```
 
 你可以通过按 `Ctrl-A` 等按键在字符串或者注释中添加不可打印字符, 观察它们是否具有正确的表示. 
+
+### 多行注释着色
+
+我们希望实现的最后一个功能是多行注释高亮. 首先将 `HL_MLCOMMENT` 添加进 `editorHighlight` 枚举量中: 
+
+```c
+/*** defines ***/
+
+enum editorHighlight {
+	HL_NORMAL = 0, 
+	HL_COMMENT, 
+	HL_MLCOMMENT, 
+	HL_KEYWORD1, 
+	HL_KEYWORD2, 
+	HL_STRING, 
+	HL_NUMBER, 
+	HL_MATCH
+}; 
+
+/*** syntax highlighting ***/
+
+int editorSyntaxToColor(int hl) {
+	switch (hl) {
+		case HL_COMMENT: 
+		case HL_MLCOMMENT: return 36; 
+		case HL_KEYWORD1: return 33; 
+		case HL_KEYWORD2: return 32; 
+		case HL_STRING: return 35; 
+		case HL_NUMBER: return 31; 
+		case HL_MATCH: return 34; 
+		default: return 37; 
+	}
+}
+```
+
+多行注释的高亮颜色与单行注释相同(青色). 
+
+接下来我们将在 `editorSyntax` 结构体中添加两个字段 `multiline_comment_start` 和 `multiline_comment_end`. 在 `C` 中, 这两个字段的值分别为 `/*` 和 `*/`: 
+
+```c
+/*** data ***/
+
+struct editorSyntax {
+	char *filetype; 
+	char **filematch; 
+	char **keywords; 
+	char *singleline_comment_start; 
+	char *multiline_comment_start; 
+	char *multiline_comment_end; 
+	int flags; 
+}; 
+
+/*** filetypes ***/
+
+struct editorSyntax HLDB[] = {
+	{
+		"c", 
+		C_HL_extensions, 
+		C_HL_keywords, 
+		"//", "/*", "*/", 
+		HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS
+	}, 
+}; 
+```
+
+接下来修改 `editorUpdateSyntax()` 函数, 首先使用 `mcs` 和 `mce` 变量代替 `E.syntax->multiline_comment_start` 和 `E.syntax->multiline_comment_end` 字段, 以便后续使用, 并记录它们的长度: 
+
+```c
+/*** syntax highlighting ***/
+
+void editorUpdateSyntax(erow *row) {
+	row->hl = realloc(row->hl, row->rsize); 
+	memset(row->hl, HL_NORMAL, row->rsize); 
+
+	if (E.syntax == NULL) return; 
+
+	char **keywords = E.syntax->keywords; 
+
+	char *scs = E.syntax->singleline_comment_start; 
+	char *mcs = E.syntax->multiline_comment_start; 
+	char *mce = E.syntax->multiline_comment_end; 
+
+	int scs_len = scs ? strlen(scs) : 0; 
+	int mcs_len = mcs ? strlen(mcs) : 0; 
+	int mce_len = mce ? strlen(mce) : 0; 
+
+	int prev_sep = 1; 
+	int in_string = 0; 
+
+	int i = 0; 
+	while (i < row->rsize) {
+		char c = row->render[i]; 
+		unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL; 
+
+		if (scs_len && !in_string) {
+			if (!strncmp(&row->render[i], scs, scs_len)) {
+				memset(&row->hl[i], HL_COMMENT, row->rsize - i); 
+				break; 
+			}
+		}
+
+		if (E.syntax->flags & HL_HIGHLIGHT_STRINGS) {
+			if (in_string) {
+				row->hl[i] = HL_STRING; 
+				if (c == '\\' && i + 1 < row->size) {
+					row->hl[i + 1] = HL_STRING; 
+					i += 2; 
+					continue; 
+				}
+				if (c == in_string) in_string = 0; 
+				i++; 
+				prev_sep = 1; 
+				continue; 
+			} else {
+				if (c == '\"' || c == '\'') {
+					in_string = c; 
+					row->hl[i] = HL_STRING; 
+					i++; 
+					continue; 
+				}
+			}
+		}
+
+		if (E.syntax->flags & HL_HIGHLIGHT_NUMBERS) {
+			if (
+				(isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) || 
+				(c == '.' && prev_hl == HL_NUMBER)
+			) {
+				row->hl[i] = HL_NUMBER; 
+				i++; 
+				prev_sep = 0; 
+				continue; 
+			}
+		}
+
+		if (prev_sep) {
+			int j; 
+			for (j = 0; keywords[j]; j++) {
+				int klen = strlen(keywords[j]); 
+				int kw2 = keywords[j][klen - 1] == '|'; 
+				if (kw2) klen--; 
+
+				if (
+					!strncmp(&row->render[i], keywords[j], klen) && 
+					is_seperator(row->render[i + klen])
+				) {
+					memset(&row->hl[i], kw2 ? HL_KEYWORD2 : HL_KEYWORD1, klen); 
+					i += klen; 
+					break; 
+				}
+			}
+			if (keywords[j] != NULL) {
+				prev_sep = 0; 
+				continue; 
+			}
+		}
+
+		prev_sep = is_seperator(c); 
+		i++; 
+	}
+}
+```
+
+我们暂时先不关注多行注释: 
+
+```c
+/*** syntax highlighting ***/
+
+void editorUpdateSyntax(erow *row) {
+	row->hl = realloc(row->hl, row->rsize); 
+	memset(row->hl, HL_NORMAL, row->rsize); 
+
+	if (E.syntax == NULL) return; 
+
+	char **keywords = E.syntax->keywords; 
+
+	char *scs = E.syntax->singleline_comment_start; 
+	char *mcs = E.syntax->multiline_comment_start; 
+	char *mce = E.syntax->multiline_comment_end; 
+
+	int scs_len = scs ? strlen(scs) : 0; 
+	int mcs_len = mcs ? strlen(mcs) : 0; 
+	int mce_len = mce ? strlen(mce) : 0; 
+
+	int prev_sep = 1; 
+	int in_string = 0; 
+	int in_comment = 0; 
+
+	int i = 0; 
+	while (i < row->rsize) {
+		char c = row->render[i]; 
+		unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL; 
+
+		if (scs_len && !in_string) {
+			if (!strncmp(&row->render[i], scs, scs_len)) {
+				memset(&row->hl[i], HL_COMMENT, row->rsize - i); 
+				break; 
+			}
+		}
+
+		if (mcs_len && mce_len && !in_string) {
+			if (in_comment) {
+				row->hl[i] = HL_MLCOMMENT; 
+				if (!strncmp(&row->render[i], mce, mce_len)) {
+					memset(&row->hl[i], HL_MLCOMMENT, mce_len); 
+					i += mce_len; 
+					in_comment = 0; 
+					prev_sep = 1; 
+					continue; 
+				} else {
+					i++; 
+					continue; 
+				}
+			} else if (!strncmp(&row->render[i], mcs, mcs_len)) {
+				memset(&row->hl[i], HL_COMMENT, mcs_len); 
+				i += mcs_len; 
+				in_comment = 1; 
+				continue; 
+			}
+		}
+
+		if (E.syntax->flags & HL_HIGHLIGHT_STRINGS) {
+			if (in_string) {
+				row->hl[i] = HL_STRING; 
+				if (c == '\\' && i + 1 < row->size) {
+					row->hl[i + 1] = HL_STRING; 
+					i += 2; 
+					continue; 
+				}
+				if (c == in_string) in_string = 0; 
+				i++; 
+				prev_sep = 1; 
+				continue; 
+			} else {
+				if (c == '\"' || c == '\'') {
+					in_string = c; 
+					row->hl[i] = HL_STRING; 
+					i++; 
+					continue; 
+				}
+			}
+		}
+
+		if (E.syntax->flags & HL_HIGHLIGHT_NUMBERS) {
+			if (
+				(isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) || 
+				(c == '.' && prev_hl == HL_NUMBER)
+			) {
+				row->hl[i] = HL_NUMBER; 
+				i++; 
+				prev_sep = 0; 
+				continue; 
+			}
+		}
+
+		if (prev_sep) {
+			int j; 
+			for (j = 0; keywords[j]; j++) {
+				int klen = strlen(keywords[j]); 
+				int kw2 = keywords[j][klen - 1] == '|'; 
+				if (kw2) klen--; 
+
+				if (
+					!strncmp(&row->render[i], keywords[j], klen) && 
+					is_seperator(row->render[i + klen])
+				) {
+					memset(&row->hl[i], kw2 ? HL_KEYWORD2 : HL_KEYWORD1, klen); 
+					i += klen; 
+					break; 
+				}
+			}
+			if (keywords[j] != NULL) {
+				prev_sep = 0; 
+				continue; 
+			}
+		}
+
+		prev_sep = is_seperator(c); 
+		i++; 
+	}
+}
+```
+
+首先, 我们添加了一个布尔变量 `in_comment` 来记录当前是否位于多行注释中, 在循环中, 我们要求在 `mcs` 和 `mce` 均为非空字符串的情况下才进行多行注释的高亮处理. 同时需要注意当前不位于字符串中. 
+
+如果当前位于多行注释中, 我们将当前字符标记为多行注释, 并检查是否匹配结束符, 如果匹配, 将结束符标记为多行注释之后将 `in_comment` 设为 `0`, 否则自增 `i` 后进入下一轮迭代. 
+
+如果当前不位于多行注释中, 则查看是否匹配多行注释的开始符, 如果匹配, 则将开始符标记为多行注释并设置 `in_comment` 为 `1`, 否则检查其它高亮. 
+
+接下来首先让我们修复一个小问题: 在多行注释中不应当识别单行注释: 
+
+```c
+/*** syntax highlighting ***/
+
+void editorUpdateSyntax(erow *row) {
+	row->hl = realloc(row->hl, row->rsize); 
+	memset(row->hl, HL_NORMAL, row->rsize); 
+
+	if (E.syntax == NULL) return; 
+
+	char **keywords = E.syntax->keywords; 
+
+	char *scs = E.syntax->singleline_comment_start; 
+	char *mcs = E.syntax->multiline_comment_start; 
+	char *mce = E.syntax->multiline_comment_end; 
+
+	int scs_len = scs ? strlen(scs) : 0; 
+	int mcs_len = mcs ? strlen(mcs) : 0; 
+	int mce_len = mce ? strlen(mce) : 0; 
+
+	int prev_sep = 1; 
+	int in_string = 0; 
+	int in_comment = 0; 
+
+	int i = 0; 
+	while (i < row->rsize) {
+		char c = row->render[i]; 
+		unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL; 
+
+		if (scs_len && !in_string && !in_comment) {
+			if (!strncmp(&row->render[i], scs, scs_len)) {
+				memset(&row->hl[i], HL_COMMENT, row->rsize - i); 
+				break; 
+			}
+		}
+
+		if (mcs_len && mce_len && !in_string) {
+			if (in_comment) {
+				row->hl[i] = HL_MLCOMMENT; 
+				if (!strncmp(&row->render[i], mce, mce_len)) {
+					memset(&row->hl[i], HL_MLCOMMENT, mce_len); 
+					i += mce_len; 
+					in_comment = 0; 
+					prev_sep = 1; 
+					continue; 
+				} else {
+					i++; 
+					continue; 
+				}
+			} else if (!strncmp(&row->render[i], mcs, mcs_len)) {
+				memset(&row->hl[i], HL_COMMENT, mcs_len); 
+				i += mcs_len; 
+				in_comment = 1; 
+				continue; 
+			}
+		}
+
+		if (E.syntax->flags & HL_HIGHLIGHT_STRINGS) {
+			if (in_string) {
+				row->hl[i] = HL_STRING; 
+				if (c == '\\' && i + 1 < row->size) {
+					row->hl[i + 1] = HL_STRING; 
+					i += 2; 
+					continue; 
+				}
+				if (c == in_string) in_string = 0; 
+				i++; 
+				prev_sep = 1; 
+				continue; 
+			} else {
+				if (c == '\"' || c == '\'') {
+					in_string = c; 
+					row->hl[i] = HL_STRING; 
+					i++; 
+					continue; 
+				}
+			}
+		}
+
+		if (E.syntax->flags & HL_HIGHLIGHT_NUMBERS) {
+			if (
+				(isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) || 
+				(c == '.' && prev_hl == HL_NUMBER)
+			) {
+				row->hl[i] = HL_NUMBER; 
+				i++; 
+				prev_sep = 0; 
+				continue; 
+			}
+		}
+
+		if (prev_sep) {
+			int j; 
+			for (j = 0; keywords[j]; j++) {
+				int klen = strlen(keywords[j]); 
+				int kw2 = keywords[j][klen - 1] == '|'; 
+				if (kw2) klen--; 
+
+				if (
+					!strncmp(&row->render[i], keywords[j], klen) && 
+					is_seperator(row->render[i + klen])
+				) {
+					memset(&row->hl[i], kw2 ? HL_KEYWORD2 : HL_KEYWORD1, klen); 
+					i += klen; 
+					break; 
+				}
+			}
+			if (keywords[j] != NULL) {
+				prev_sep = 0; 
+				continue; 
+			}
+		}
+
+		prev_sep = is_seperator(c); 
+		i++; 
+	}
+}
+```
+
+接下来让我们真正实现跨越多行的注释. 为了实现这个目标, 我们需要前一行是否是一个未闭合的多行注释的一部分, 我们在 `erow` 结构体中添加一个 `hl_open_comment` 字段, 并添加一个 `idx` 字段记录该 `erow` 结构体的行索引, 这样每个结构体就可以知道自己的行索引, 进而知道其前一行的 `hl_open_comment` 的值. 
+
+```c
+/*** data ***/
+
+typedef struct erow {
+	int idx; 
+	int size; 
+	int rsize; 
+	char *chars; 
+	char *render; 
+	unsigned char *hl; 
+	int hl_open_comment; 
+} erow; 
+
+/*** row operations ***/
+
+void editorInsertRow(int at, char *s, size_t len) {
+	if (at < 0 || at > E.numrows) return; 
+
+	E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1)); 
+	memmove(&E.row[at + 1], &E.row[at], sizeof(erow) * (E.numrows - at)); 
+
+	E.row[at].idx = at; 
+
+	E.row[at].size = len; 
+	E.row[at].chars = malloc(len + 1); 
+	memcpy(E.row[at].chars, s, len); 
+	E.row[at].chars[len] = '\0'; 
+
+	E.row[at].rsize = 0; 
+	E.row[at].render = NULL; 
+	E.row[at].hl = NULL; 
+	E.row[at].hl_open_comment = 0; 
+	editorUpdateRow(&E.row[at]); 
+
+	E.numrows++; 
+	E.dirty++; 
+}
+```
+
+我们在行被插入的时候设定它的 `idx` 字段. 我们还需要保证当一行被插入或删除的时候, 位于其之后的行的 `idx` 作出对应的改变: 
+
+```c
+/*** row operations ***/
+
+void editorInsertRow(int at, char *s, size_t len) {
+	if (at < 0 || at > E.numrows) return; 
+
+	E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1)); 
+	memmove(&E.row[at + 1], &E.row[at], sizeof(erow) * (E.numrows - at)); 
+	for (int j = at + 1; j <= E.numrows; j++) E.row[j].idx++; 
+
+	E.row[at].idx = at; 
+
+	E.row[at].size = len; 
+	E.row[at].chars = malloc(len + 1); 
+	memcpy(E.row[at].chars, s, len); 
+	E.row[at].chars[len] = '\0'; 
+
+	E.row[at].rsize = 0; 
+	E.row[at].render = NULL; 
+	E.row[at].hl = NULL; 
+	E.row[at].hl_open_comment = 0; 
+	editorUpdateRow(&E.row[at]); 
+
+	E.numrows++; 
+	E.dirty++; 
+}
+
+void editorRowDelRow(int at) {
+	if (at < 0 || at >= E.numrows) return; 
+	editorFreeRow(&E.row[at]); 
+	memmove(&E.row[at], &E.row[at + 1], sizeof(erow) * (E.numrows - at - 1)); 
+	for (int j = at; j < E.numrows - 1; j++) E.row[j].idx--; 
+	E.numrows--; 
+	E.dirty++; 
+}
+```
+
+最后一步: 
+
+```c
+/*** syntax highlighting ***/
+
+void editorUpdateSyntax(erow *row) {
+	row->hl = realloc(row->hl, row->rsize); 
+	memset(row->hl, HL_NORMAL, row->rsize); 
+
+	if (E.syntax == NULL) return; 
+
+	char **keywords = E.syntax->keywords; 
+
+	char *scs = E.syntax->singleline_comment_start; 
+	char *mcs = E.syntax->multiline_comment_start; 
+	char *mce = E.syntax->multiline_comment_end; 
+
+	int scs_len = scs ? strlen(scs) : 0; 
+	int mcs_len = mcs ? strlen(mcs) : 0; 
+	int mce_len = mce ? strlen(mce) : 0; 
+
+	int prev_sep = 1; 
+	int in_string = 0; 
+	int in_comment = (row->idx > 0 && E.row[row->idx - 1].hl_open_comment); 
+
+	int i = 0; 
+	while (i < row->rsize) {
+		char c = row->render[i]; 
+		unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL; 
+
+		if (scs_len && !in_string && !in_comment) {
+			if (!strncmp(&row->render[i], scs, scs_len)) {
+				memset(&row->hl[i], HL_COMMENT, row->rsize - i); 
+				break; 
+			}
+		}
+
+		if (mcs_len && mce_len && !in_string) {
+			if (in_comment) {
+				row->hl[i] = HL_MLCOMMENT; 
+				if (!strncmp(&row->render[i], mce, mce_len)) {
+					memset(&row->hl[i], HL_MLCOMMENT, mce_len); 
+					i += mce_len; 
+					in_comment = 0; 
+					prev_sep = 1; 
+					continue; 
+				} else {
+					i++; 
+					continue; 
+				}
+			} else if (!strncmp(&row->render[i], mcs, mcs_len)) {
+				memset(&row->hl[i], HL_COMMENT, mcs_len); 
+				i += mcs_len; 
+				in_comment = 1; 
+				continue; 
+			}
+		}
+
+		if (E.syntax->flags & HL_HIGHLIGHT_STRINGS) {
+			if (in_string) {
+				row->hl[i] = HL_STRING; 
+				if (c == '\\' && i + 1 < row->size) {
+					row->hl[i + 1] = HL_STRING; 
+					i += 2; 
+					continue; 
+				}
+				if (c == in_string) in_string = 0; 
+				i++; 
+				prev_sep = 1; 
+				continue; 
+			} else {
+				if (c == '\"' || c == '\'') {
+					in_string = c; 
+					row->hl[i] = HL_STRING; 
+					i++; 
+					continue; 
+				}
+			}
+		}
+
+		if (E.syntax->flags & HL_HIGHLIGHT_NUMBERS) {
+			if (
+				(isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) || 
+				(c == '.' && prev_hl == HL_NUMBER)
+			) {
+				row->hl[i] = HL_NUMBER; 
+				i++; 
+				prev_sep = 0; 
+				continue; 
+			}
+		}
+
+		if (prev_sep) {
+			int j; 
+			for (j = 0; keywords[j]; j++) {
+				int klen = strlen(keywords[j]); 
+				int kw2 = keywords[j][klen - 1] == '|'; 
+				if (kw2) klen--; 
+
+				if (
+					!strncmp(&row->render[i], keywords[j], klen) && 
+					is_seperator(row->render[i + klen])
+				) {
+					memset(&row->hl[i], kw2 ? HL_KEYWORD2 : HL_KEYWORD1, klen); 
+					i += klen; 
+					break; 
+				}
+			}
+			if (keywords[j] != NULL) {
+				prev_sep = 0; 
+				continue; 
+			}
+		}
+
+		prev_sep = is_seperator(c); 
+		i++; 
+	}
+
+	int changed = (row->hl_open_comment != in_comment); 
+	row->hl_open_comment = in_comment; 
+	if (changed && row->idx + 1 < E.numrows) {
+		editorUpdateSyntax(&E.row[row->idx + 1]); 
+	}
+}
+```
+
+在 `editorUpdateSyntax()` 函数开头, 如果前一行的 `hl_open_comment` 为真, 则将 `in_comment` 设置为真. 
+
+在 `editorUpdateSyntax()` 函数的末尾, 将本行的 `hl_open_comment` 设置为结束时的 `in_comment` 值. 如果处理之前和处理之后的 `hl_open_comment` 值不同, 说明在这一行发生了多行注释的开始或结束, 这会影响之后的行. 因此, 在这种情况下, 我们递归处理下一行. 
+
+## 扩展功能
+
