@@ -78,9 +78,10 @@ struct editorConfig {
 	int rx;
 	int lastrx;  
 	int rowoff; 
-	int coloff;
+	int coloff; 
 	int screenrows; 
 	int screencols; 
+	int idxoff; 
 	int numrows; 
 	erow *row; 
 	int dirty; 
@@ -127,6 +128,16 @@ char *editorPrompt(char *prompt, void (*callback)(char *, int));
 
 static inline int min_int(int a, int b) {
 	return a < b ? a : b; 
+}
+
+static inline int count_digits(int n) {
+	if (n == 0) return 1; 
+	int count = 0; 
+	while (n != 0) {
+		n /= 10; 
+		count++; 
+	}
+	return count; 
 }
 
 /*** terminal ***/
@@ -769,14 +780,19 @@ void editorScroll(void) {
 
 void editorDrawRows(struct abuf *ab) {
 	int y; 
+	E.idxoff = min_int(count_digits(E.rowoff + E.screenrows), E.numrows); 
+	int leftcols = E.screencols - E.idxoff - 3; 
 	for (y = 0; y < E.screenrows; y++) {
 		int filerow = y + E.rowoff; 
 		if (filerow >= E.numrows) {
+			abAppend(ab, "\x1b[7m ", 5); 
+			for (int i = 0; i < E.idxoff; i++) abAppend(ab, " ", 1); 
+			abAppend(ab, " \x1b[m ", 5); 
 			if (E.numrows == 0 && y == E.screenrows / 3) {
 				char welcome[80]; 
 				int welcomelen = snprintf(welcome, sizeof(welcome), "Kilo editor -- version %s", KILO_VERSION); 
-				if (welcomelen > E.screencols) welcomelen = E.screencols; 
-				int padding = (E.screencols - welcomelen) / 2; 
+				if (welcomelen > leftcols) welcomelen = leftcols; 
+				int padding = (leftcols - welcomelen) / 2; 
 				if (padding) {
 					abAppend(ab, "~", 1); 
 					padding--; 
@@ -787,9 +803,15 @@ void editorDrawRows(struct abuf *ab) {
 				abAppend(ab, "~", 1);
 			}
 		} else {
+			abAppend(ab, "\x1b[7m ", 5); 
+			char rowidx[16]; 
+			int idxlen = snprintf(rowidx, sizeof(rowidx), "%d", filerow + 1); 
+			for (int i = 0; i < E.idxoff - idxlen; i++) abAppend(ab, " ", 1); 
+			abAppend(ab, rowidx, idxlen); 
+			abAppend(ab, " \x1b[m ", 5); 
 			int len = E.row[filerow].rsize - E.coloff; 
 			if (len < 0) len = 0; 
-			if (len > E.screencols) len = E.screencols; 
+			if (len > leftcols) len = leftcols; 
 			char *c = &E.row[filerow].render[E.coloff]; 
 			unsigned char *hl = &E.row[filerow].hl[E.coloff]; 
 			int current_color = -1; 
@@ -832,7 +854,10 @@ void editorDrawRows(struct abuf *ab) {
 }
 
 void editorDrawStatusBar(struct abuf *ab) {
-	abAppend(ab, "\x1b[7m", 4); 
+	for (int i = 0; i < E.idxoff + 2; i++) abAppend(ab, " ", 1); 
+	abAppend(ab, "\x1b[7m", 5);
+	abAppend(ab, " ", 1);
+	int leftcols = E.screencols - E.idxoff - 3; 
 	char status[80], rstatus[80];
 	int len = snprintf(
 		status, sizeof(status), "%.20s - %d lines %s", 
@@ -843,10 +868,10 @@ void editorDrawStatusBar(struct abuf *ab) {
 		rstatus, sizeof(rstatus), "%s | %d/%d", 
 		E.syntax ? E.syntax->filetype : "no ft", E.cy + 1, E.numrows
 	); 
-	if (len > E.screencols) len = E.screencols; 
+	if (len > leftcols) len = leftcols; 
 	abAppend(ab, status, len); 
-	while (len < E.screencols) {
-		if (E.screencols - len == rlen) {
+	while (len < leftcols - 1) {
+		if (leftcols - 1 - len == rlen) {
 			abAppend(ab, rstatus, rlen); 
 			break; 
 		} else {
@@ -854,14 +879,19 @@ void editorDrawStatusBar(struct abuf *ab) {
 			len++; 
 		}
 	}
+	abAppend(ab, " ", 1); 
 	abAppend(ab, "\x1b[m", 3); 
 	abAppend(ab, "\r\n", 2); 
 }
 
 void editorDrawMessageBar(struct abuf *ab) {
 	abAppend(ab, "\x1b[K", 3); 
+	abAppend(ab, "\x1b[7m", 4); 
+	for (int i = 0; i < E.idxoff + 2; i++) abAppend(ab, " ", 1); 
+	abAppend(ab, "\x1b[m ", 4); 
+	int leftcols = E.screencols - E.idxoff - 3; 
 	int msglen = strlen(E.statusmsg); 
-	if (msglen > E.screencols) msglen = E.screencols; 
+	if (msglen > leftcols) msglen = leftcols; 
 	if (msglen && time(NULL) - E.statusmsg_time < 5) {
 		abAppend(ab, E.statusmsg, msglen); 
 	}
@@ -880,7 +910,7 @@ void editorRefreshScreen(void) {
 	editorDrawMessageBar(&ab); 
 
 	char buf[32]; 
-	snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.rx - E.coloff) + 1); 
+	snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.rx - E.coloff + E.idxoff + 3) + 1); 
 	abAppend(&ab, buf, strlen(buf)); 
 
 	abAppend(&ab, "\x1b[?25h", 6); 
@@ -1075,6 +1105,7 @@ void initEditor(void) {
 	E.rx = 0; 
 	E.rowoff = 0; 
 	E.coloff = 0; 
+	E.idxoff = 0; 
 	E.numrows = 0; 
 	E.row = NULL; 
 	E.dirty = 0; 

@@ -7285,3 +7285,207 @@ void editorMoveCursor(int key) {
 }
 ```
 
+### 行号显示
+
+在屏幕左侧添加使用反转色表示的行号. 同时修改了状态条和状态信息中的信息显示位置, 避免与行号混杂显示. 
+
+```c
+/*** data ***/
+
+struct editorConfig {
+	int cx, cy; 
+	int rx;
+	int lastrx;  
+	int rowoff; 
+	int coloff; 
+	int screenrows; 
+	int screencols; 
+	int idxoff; 
+	int numrows; 
+	erow *row; 
+	int dirty; 
+	char *filename; 
+	char statusmsg[80]; 
+	time_t statusmsg_time; 
+	struct editorSyntax *syntax; 
+	struct termios orig_termios; 
+}; 
+
+/*** general functions ***/
+
+static inline int count_digits(int n) {
+	if (n == 0) return 1; 
+	int count = 0; 
+	while (n != 0) {
+		n /= 10; 
+		count++; 
+	}
+	return count; 
+}
+
+/*** output ***/
+
+void editorDrawRows(struct abuf *ab) {
+	int y; 
+	E.idxoff = min_int(count_digits(E.rowoff + E.screenrows), E.numrows); 
+	int leftcols = E.screencols - E.idxoff - 3; 
+	for (y = 0; y < E.screenrows; y++) {
+		int filerow = y + E.rowoff; 
+		if (filerow >= E.numrows) {
+			abAppend(ab, "\x1b[7m ", 5); 
+			for (int i = 0; i < E.idxoff; i++) abAppend(ab, " ", 1); 
+			abAppend(ab, " \x1b[m ", 5); 
+			if (E.numrows == 0 && y == E.screenrows / 3) {
+				char welcome[80]; 
+				int welcomelen = snprintf(welcome, sizeof(welcome), "Kilo editor -- version %s", KILO_VERSION); 
+				if (welcomelen > leftcols) welcomelen = leftcols; 
+				int padding = (leftcols - welcomelen) / 2; 
+				if (padding) {
+					abAppend(ab, "~", 1); 
+					padding--; 
+				}
+				while (padding--) abAppend(ab, " ", 1); 
+				abAppend(ab, welcome, welcomelen); 
+			} else {
+				abAppend(ab, "~", 1);
+			}
+		} else {
+			abAppend(ab, "\x1b[7m ", 5); 
+			char rowidx[16]; 
+			int idxlen = snprintf(rowidx, sizeof(rowidx), "%d", filerow + 1); 
+			for (int i = 0; i < E.idxoff - idxlen; i++) abAppend(ab, " ", 1); 
+			abAppend(ab, rowidx, idxlen); 
+			abAppend(ab, " \x1b[m ", 5); 
+			int len = E.row[filerow].rsize - E.coloff; 
+			if (len < 0) len = 0; 
+			if (len > leftcols) len = leftcols; 
+			char *c = &E.row[filerow].render[E.coloff]; 
+			unsigned char *hl = &E.row[filerow].hl[E.coloff]; 
+			int current_color = -1; 
+			int j; 
+			for (j = 0; j < len; j++) {
+				if (iscntrl(c[j])) {
+					char sym = (c[j] <= 26) ? '@' + c[j] : '?'; 
+					abAppend(ab, "\x1b[7m", 4); 
+					abAppend(ab, &sym, 1); 
+					abAppend(ab, "\x1b[m", 3); 
+					if (current_color != -1) {
+						char buf[16]; 
+						int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", current_color); 
+						abAppend(ab, buf, clen); 
+					}
+				} else if (hl[j] == HL_NORMAL) {
+					if (current_color != -1) {
+						abAppend(ab, "\x1b[39m", 5); 
+						current_color = -1; 
+					}
+					abAppend(ab, &c[j], 1); 
+				} else {
+					int color = editorSyntaxToColor(hl[j]);
+					if (color != current_color) {
+						current_color = color;  
+						char buf[16]; 
+						int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", color); 
+						abAppend(ab, buf, clen); 
+					}
+					abAppend(ab, &c[j], 1); 
+				}
+			}
+			abAppend(ab, "\x1b[39m", 5); 
+		}
+
+		
+		abAppend(ab, "\x1b[K", 3); 
+		abAppend(ab, "\r\n", 2);
+	}
+}
+
+void editorDrawStatusBar(struct abuf *ab) {
+	for (int i = 0; i < E.idxoff + 2; i++) abAppend(ab, " ", 1); 
+	abAppend(ab, "\x1b[7m", 5);
+	abAppend(ab, " ", 1);
+	int leftcols = E.screencols - E.idxoff - 3; 
+	char status[80], rstatus[80];
+	int len = snprintf(
+		status, sizeof(status), "%.20s - %d lines %s", 
+		E.filename ? E.filename : "[No Name]", E.numrows, 
+		E.dirty ? "(modified)" : ""
+	); 
+	int rlen = snprintf(
+		rstatus, sizeof(rstatus), "%s | %d/%d", 
+		E.syntax ? E.syntax->filetype : "no ft", E.cy + 1, E.numrows
+	); 
+	if (len > leftcols) len = leftcols; 
+	abAppend(ab, status, len); 
+	while (len < leftcols - 1) {
+		if (leftcols - 1 - len == rlen) {
+			abAppend(ab, rstatus, rlen); 
+			break; 
+		} else {
+			abAppend(ab, " ", 1); 
+			len++; 
+		}
+	}
+	abAppend(ab, " ", 1); 
+	abAppend(ab, "\x1b[m", 3); 
+	abAppend(ab, "\r\n", 2); 
+}
+
+void editorDrawMessageBar(struct abuf *ab) {
+	abAppend(ab, "\x1b[K", 3); 
+	abAppend(ab, "\x1b[7m", 4); 
+	for (int i = 0; i < E.idxoff + 2; i++) abAppend(ab, " ", 1); 
+	abAppend(ab, "\x1b[m ", 4); 
+	int leftcols = E.screencols - E.idxoff - 3; 
+	int msglen = strlen(E.statusmsg); 
+	if (msglen > leftcols) msglen = leftcols; 
+	if (msglen && time(NULL) - E.statusmsg_time < 5) {
+		abAppend(ab, E.statusmsg, msglen); 
+	}
+}
+
+void editorRefreshScreen(void) {
+	editorScroll();
+
+	struct abuf ab = ABUF_INIT; 
+
+	abAppend(&ab, "\x1b[?25l", 6); 
+	abAppend(&ab, "\x1b[H", 3); 
+
+	editorDrawRows(&ab);
+	editorDrawStatusBar(&ab); 
+	editorDrawMessageBar(&ab); 
+
+	char buf[32]; 
+	snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.rx - E.coloff + E.idxoff + 3) + 1); 
+	abAppend(&ab, buf, strlen(buf)); 
+
+	abAppend(&ab, "\x1b[?25h", 6); 
+	write(STDOUT_FILENO, ab.b, ab.len);
+	abFree(&ab);
+}
+
+/*** init ***/
+
+void initEditor(void) {
+	E.cx = 0; 
+	E.cy = 0; 
+	E.rx = 0; 
+	E.rowoff = 0; 
+	E.coloff = 0; 
+	E.idxoff = 0; 
+	E.numrows = 0; 
+	E.row = NULL; 
+	E.dirty = 0; 
+	E.filename = NULL; 
+	E.statusmsg[0] = '\0'; 
+	E.statusmsg_time = 0; 
+	E.syntax = NULL; 
+
+	if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
+		die("getWindowSize"); 
+	}
+	E.screenrows -= 2; 
+}
+```
+
